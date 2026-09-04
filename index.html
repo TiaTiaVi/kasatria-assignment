@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>Kasatria Assignment - People Table</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="css/style.css">
+	</head>
+	<body>
+
+		<!-- ================= LOGIN SCREEN (Image A) ================= -->
+		<div id="login-screen">
+			<div id="login-card">
+				<h1>Welcome Back</h1>
+				<p>Sign in with Google to view the visualization.</p>
+				<div id="g_id_signin_container"></div>
+			</div>
+		</div>
+
+		<!-- ================= 3D VISUALIZATION (hidden until login) ================= -->
+		<div id="app" class="hidden">
+			<div id="info">Kasatria Assignment - People Table</div>
+			<div id="container"></div>
+
+			<div id="legend">
+				<span>Low</span>
+				<div class="bar"></div>
+				<span>High</span>
+			</div>
+
+			<div id="menu">
+				<button id="table">TABLE</button>
+				<button id="sphere">SPHERE</button>
+				<button id="helix">HELIX</button>
+				<button id="grid">GRID</button>
+			</div>
+		</div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+					"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+				}
+			}
+		</script>
+
+		<script type="module" src="js/main.js"></script>
+
+	</body>
+</html>

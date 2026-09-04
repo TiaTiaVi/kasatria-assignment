@@ -1,0 +1,167 @@
+html, body {
+	margin: 0;
+	padding: 0;
+	background: #000;
+	overflow: hidden;
+	font-family: Helvetica, Arial, sans-serif;
+}
+
+#info {
+	position: absolute;
+	top: 10px;
+	width: 100%;
+	text-align: center;
+	color: rgba(127,255,255,0.75);
+	font-size: 13px;
+	z-index: 5;
+}
+
+/* ---------- Bottom menu (Table / Sphere / Helix / Grid) ---------- */
+
+#menu {
+	position: absolute;
+	bottom: 20px;
+	width: 100%;
+	text-align: center;
+	z-index: 5;
+}
+
+#menu button {
+	color: rgba(127,255,255,0.75);
+	background: transparent;
+	outline: 1px solid rgba(127,255,255,0.75);
+	border: 0;
+	padding: 6px 14px;
+	margin: 0 4px;
+	cursor: pointer;
+	font-size: 13px;
+	letter-spacing: 1px;
+}
+
+#menu button:hover {
+	background-color: rgba(0,255,255,0.5);
+}
+
+#menu button:active {
+	color: #000;
+	background-color: rgba(0,255,255,0.75);
+}
+
+/* ---------- Net worth legend ---------- */
+
+#legend {
+	position: absolute;
+	bottom: 60px;
+	left: 50%;
+	transform: translateX(-50%);
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	color: rgba(255,255,255,0.75);
+	font-size: 12px;
+	z-index: 5;
+}
+
+#legend .bar {
+	width: 160px;
+	height: 8px;
+	border-radius: 4px;
+	background: linear-gradient(to right, rgb(255,59,48), rgb(255,149,0), rgb(76,217,100));
+}
+
+/* ---------- Person tile ---------- */
+
+.element {
+	width: 130px;
+	height: 180px;
+	border-radius: 6px;
+	border: 2px solid rgba(127,255,255,0.25);
+	font-family: Helvetica, sans-serif;
+	text-align: center;
+	line-height: normal;
+	cursor: default;
+	overflow: hidden;
+	position: relative;
+	background-color: rgba(0,20,20,0.6);
+}
+
+.element:hover {
+	box-shadow: 0px 0px 16px rgba(0,255,255,0.85) !important;
+}
+
+.element .number {
+	position: absolute;
+	top: 4px;
+	right: 6px;
+	font-size: 10px;
+	color: rgba(255,255,255,0.6);
+	z-index: 2;
+}
+
+.element .photo {
+	width: 100%;
+	height: 90px;
+	object-fit: cover;
+	display: block;
+	background: #111;
+}
+
+.element .name {
+	font-size: 11px;
+	font-weight: bold;
+	color: #fff;
+	margin-top: 4px;
+	padding: 0 4px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.element .details {
+	font-size: 9px;
+	color: rgba(255,255,255,0.75);
+	margin-top: 3px;
+	line-height: 1.3;
+}
+
+/* ---------- Login screen (Image A) ---------- */
+
+#login-screen {
+	position: fixed;
+	inset: 0;
+	background: #f4f5f7;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 100;
+}
+
+#login-card {
+	background: #fff;
+	border-radius: 12px;
+	box-shadow: 0 4px 24px rgba(0,0,0,0.12);
+	padding: 40px 48px;
+	text-align: center;
+	max-width: 340px;
+}
+
+#login-card h1 {
+	font-size: 20px;
+	margin-bottom: 8px;
+	color: #202124;
+}
+
+#login-card p {
+	font-size: 13px;
+	color: #5f6368;
+	margin-bottom: 24px;
+}
+
+#g_id_signin_container {
+	display: flex;
+	justify-content: center;
+}
+
+.hidden {
+	display: none !important;
+}
