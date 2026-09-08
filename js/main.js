@@ -13,7 +13,7 @@ const cameraTweens = new TWEEN.Group();
 
 import { getData } from './dataLoader.js?v=4';
 import { buildTile, formatCurrency, getNetWorthColor } from './tileFactory.js?v=24';
-import { buildTableTargets, buildSphereTargets, buildDoubleHelixTargets, buildGridTargets, GRID_WIDTH, GRID_HEIGHT, computeScaleFactor } from './layouts.js?v=23';
+import { buildTableTargets, buildSphereTargets, buildHelixTargets, buildGridTargets, GRID_WIDTH, GRID_HEIGHT, computeScaleFactor } from './layouts.js?v=24';
 import { initGoogleSignIn, isSessionExpired, signOut } from './auth.js?v=3';
 
 let camera, scene, renderer, controls;
@@ -310,7 +310,7 @@ function rebuildTargets( count ) {
 	targets = {
 		table: buildTableTargets( count ),
 		sphere: buildSphereTargets( count ),
-		helix: buildDoubleHelixTargets( count ),
+		helix: buildHelixTargets( count ),
 		grid: buildGridTargets( count )
 	};
 
@@ -561,7 +561,7 @@ function handleDirectionalInput( direction ) {
 
 	} else if ( activeLayoutKey === 'helix' ) {
 
-		// Left/right reveal the other strand/side (rotate around the axis).
+		// Left/right spin around the axis to see the far side of the coil.
 		// Up/down climb the coil's height, since that's where "the next
 		// data" actually lives for a helix - not around its circumference.
 		if ( direction === 'left' ) rotateCameraStep( 'theta', - 1 );
@@ -914,7 +914,7 @@ function getZoomLimits() {
 		// Without a floor of its own, the generic 0.15x-of-fit-distance limit
 		// let the camera zoom in far enough to end up INSIDE the coil's own
 		// radius, looking back out through it from within - a wide, warped
-		// "fisheye funnel" that doesn't read as a double helix at all (it's
+		// "fisheye funnel" that doesn't read as a spiral at all (it's
 		// the exact shape someone gets stuck in if they scroll-zoom in too
 		// far and can no longer tell what they're looking at). Tying the
 		// floor to the coil's own actual radius instead means the camera can
@@ -1093,10 +1093,10 @@ function getFramingFov( layoutKey ) {
 // Helix starts dead-on at the equator (phi = 90 degrees, i.e. Math.PI / 2) -
 // a plain, flat, straight-on view, exactly as before.
 //
-// Helix is the one shape that actually needs a tilt by default: a double
-// helix viewed exactly at the equator reads as a flat wall of vertical
-// columns - you can't tell it's wound in a circle at all unless you rotate
-// it yourself first. Tilting the DEFAULT view down slightly (still safely
+// Helix is the one shape that actually needs a tilt by default: a spiral
+// viewed exactly at the equator reads as a flat wall of vertical columns -
+// you can't tell it's wound in a circle at all unless you rotate it
+// yourself first. Tilting the DEFAULT view down slightly (still safely
 // inside MIN_PHI/MAX_PHI, nowhere near the "steep angle turns it into a
 // confusing funnel" zone those constants already guard against) is what
 // actually lets the coil read as a circular, spiraling shape right away -

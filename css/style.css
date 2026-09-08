@@ -46,22 +46,6 @@ html, body {
 	text-overflow: ellipsis;
 }
 
-/* Small, unobtrusive build marker under the title. Its whole purpose is to
-   make it trivially obvious which copy of the code is actually running -
-   comparing this number is much faster than diffing files, and directly
-   avoids the situation where an old, already-fixed copy gets mistaken for
-   a fresh bug report. Bump the date/number here on every delivered zip. */
-#build-version {
-	position: absolute;
-	top: 34px;
-	left: 16px;
-	font-size: 10px;
-	color: rgba(127,255,255,0.35);
-	z-index: 90;
-	pointer-events: none;
-	text-shadow: 0 0 4px #000;
-}
-
 #sign-out {
 	background: transparent;
 	border: 1px solid rgba(255,255,255,0.3);

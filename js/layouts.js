@@ -82,50 +82,49 @@ function buildSphereTargets( count ) {
 
 }
 
-function buildDoubleHelixTargets( count ) {
+function buildHelixTargets( count ) {
 
 	const scale = computeScaleFactor( count );
 
-	// A DOUBLE helix: two intertwined strands, like DNA.
-	// Even-index tiles go on strand A, odd-index tiles go on strand B.
-	// Strand B is offset by 180 degrees (Math.PI) from strand A at the same "rung" height,
-	// which is what makes them visually wind around each other instead of stacking as one strand.
+	// A single continuous spiral - one tile per step, wound steadily
+	// downward around one shared axis - matching the shape of three.js's
+	// own official CSS3D periodic-table example's helix
+	// (https://threejs.org/examples/#css3d_periodictable): fixed radius,
+	// a constant angle step per tile, and each tile turned to face
+	// STRAIGHT OUTWARD (via lookAt on a point twice as far out along its
+	// own radius) rather than sideways along the direction of travel.
+	// That's what makes the coil readable as a whole from one side-on
+	// camera angle: every tile presents its full face to the viewer at
+	// once, instead of being seen edge-on at the sides of the loop the way
+	// a "wall of columns" would be.
+	//
+	// This replaces an earlier two-strand "double helix" (DNA-style) shape.
+	// That version worked, but two strands sharing the same coil meant half
+	// the tiles were always on the far side facing away, and it needed its
+	// own bespoke tuning to avoid looking like solid vertical pillars.
+	// Reusing the reference example's own proven numbers - radius 900,
+	// 0.175 radians of turn per tile, 8 units of drop per tile - sidesteps
+	// re-deriving that tuning from scratch: those exact constants are
+	// already the ones that read cleanly as a wound spiral over there, and
+	// they scale here the same way every other shape's spacing does (by
+	// the same count-based `scale` factor), so the coil stays readable
+	// whether the sheet has 50 people or 500.
 	const vector = new THREE.Vector3();
 	const targets = [];
 
-	const rungs = Math.max( 1, Math.ceil( count / 2 ) );
+	const RADIUS = 900 * scale;
+	const ANGLE_STEP = 0.175;   // radians of turn per tile - identical to the reference example
+	const Y_STEP = 8 * scale;   // vertical drop per tile
 
-	// The coil is defined by a fixed TOTAL number of turns over the whole
-	// shape (not a fixed per-rung angle) - this is what keeps it looking
-	// like a proper, evenly-wound spiral no matter how many people are in
-	// the data, instead of a fixed angle-per-rung silently over- or
-	// under-winding the coil as the count changes.
-	//
-	// IMPORTANT: this previously used a fixed 18px vertical step per rung,
-	// which packed each 360-degree loop only ~250px apart - less than the
-	// tile's own height (180px). Seen from a fixed angle, that made
-	// consecutive coils visually collide into solid vertical bars instead
-	// of a readable spiral (the "looks like pillars, not a helix" bug).
-	// 26px per rung instead gives each full turn roughly 3 tile-heights of
-	// clearance, so the coils stay visually separated.
-	// Widened significantly (radius 820 -> 1300) and shortened a bit
-	// (26px/rung -> 20px/rung) so the coil reads as a broad, screen-filling
-	// spiral rather than a tall narrow tube - arc-length between rungs
-	// actually gets even MORE generous at this wider radius (about 368
-	// units vs the previous 232), so spacing stays safely clear of the
-	// original overlapping-pillars bug despite the shorter height.
-	const TOTAL_TURNS = 4.5;
-	const ANGLE_STEP = ( TOTAL_TURNS * Math.PI * 2 ) / rungs;   // how much each rung rotates around the helix axis
-	const Y_STEP = 20 * scale;                                  // vertical distance between rungs
-	const RADIUS = 1300 * scale;
+	// Centers the whole spiral vertically around y=0 regardless of how many
+	// tiles are in it (the reference example never needs this - its
+	// element count is fixed - but our data isn't).
+	const Y_OFFSET = ( count - 1 ) * Y_STEP / 2;
 
 	for ( let i = 0; i < count; i ++ ) {
 
-		const rung = Math.floor( i / 2 );          // which "rung" of the ladder this tile belongs to
-		const strand = i % 2;                      // 0 = strand A, 1 = strand B
-
-		const theta = rung * ANGLE_STEP + ( strand === 1 ? Math.PI : 0 );
-		const y = - ( rung * Y_STEP ) + 450;
+		const theta = i * ANGLE_STEP + Math.PI;
+		const y = - ( i * Y_STEP ) + Y_OFFSET;
 
 		const object = new THREE.Object3D();
 		object.position.setFromCylindricalCoords( RADIUS, theta, y );
@@ -201,4 +200,4 @@ function buildGridTargets( count ) {
 
 }
 
-export { buildTableTargets, buildSphereTargets, buildDoubleHelixTargets, buildGridTargets, GRID_WIDTH, GRID_HEIGHT, computeScaleFactor };
+export { buildTableTargets, buildSphereTargets, buildHelixTargets, buildGridTargets, GRID_WIDTH, GRID_HEIGHT, computeScaleFactor };
