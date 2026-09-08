@@ -1,10 +1,11 @@
 <!DOCTYPE html>
 <html>
 	<head>
-		<title>Kasatria Assignment - People Table</title>
+		<title>Kasatria People Visualization</title>
 		<meta charset="utf-8">
 		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
-		<link type="text/css" rel="stylesheet" href="css/style.css">
+		<link type="text/css" rel="stylesheet" href="css/style.css?v=24">
+		<script src="https://accounts.google.com/gsi/client" async defer></script>
 	</head>
 	<body>
 
@@ -14,25 +15,111 @@
 				<h1>Welcome Back</h1>
 				<p>Sign in with Google to view the visualization.</p>
 				<div id="g_id_signin_container"></div>
+				<div id="login-access-note">
+					Access is currently limited to approved accounts. If you can't sign in,
+					contact the site owner chyntiavy@gmail.com to be added.
+				</div>
 			</div>
 		</div>
 
 		<!-- ================= 3D VISUALIZATION (hidden until login) ================= -->
 		<div id="app" class="hidden">
-			<div id="info">Kasatria Assignment - People Table</div>
+			<div id="info">Kasatria People Visualization</div>
+			<div id="build-version" title="Confirms which build of the code is actually running - if you're ever unsure whether you're looking at an up-to-date copy, this number is the fastest way to check">Build 2026-09-08.1</div>
+
+			<div id="top-toolbar">
+				<a id="open-sheet" href="https://docs.google.com/spreadsheets/d/1--mvJzdnU1cNuQRJrqOzJOSAL7WiesR-laX4iBEav8s/edit" target="_blank" rel="noopener" title="Add, edit, or remove people here">Manage Data</a>
+				<button id="refresh-data" title="Reload the latest data after editing the Sheet">Refresh</button>
+				<button id="insights-toggle" title="Show data insights">Insights</button>
+				<button id="help-button" title="How to use this page">?</button>
+				<button id="sign-out" title="Sign out">Sign Out</button>
+			</div>
+
 			<div id="container"></div>
 
 			<div id="legend">
-				<span>Low</span>
-				<div class="bar"></div>
-				<span>High</span>
+				<span class="swatch red"></span><span>Below $100K</span>
+				<span class="swatch orange"></span><span>$100K - $200K</span>
+				<span class="swatch green"></span><span>Above $200K</span>
 			</div>
+
+			<!-- Shown only while stepping through Grid's depth layers with the
+			     arrow keys / arrow-pad - no slider, navigation is keyboard/pad-driven. -->
+			<div id="grid-layer-status" class="hidden"></div>
 
 			<div id="menu">
 				<button id="table">TABLE</button>
 				<button id="sphere">SPHERE</button>
 				<button id="helix">HELIX</button>
 				<button id="grid">GRID</button>
+			</div>
+
+			<!-- On-screen navigation cluster: arrow-pad (shape-aware), reset view,
+			     a free-rotate "ball", and zoom +/- - keyboard arrows do the exact
+			     same thing as the arrow-pad buttons, sharing the same code. -->
+			<div id="nav-pad">
+				<div id="rotate-pad">
+					<button class="nav-btn" id="rotate-up" title="Up">&#9650;</button>
+					<div class="nav-mid-row">
+						<button class="nav-btn" id="rotate-left" title="Left">&#9664;</button>
+						<button class="nav-btn" id="rotate-right" title="Right">&#9654;</button>
+					</div>
+					<button class="nav-btn" id="rotate-down" title="Down">&#9660;</button>
+				</div>
+				<button id="reset-view-icon" title="Reset the view">RESET</button>
+				<button id="fit-view-icon" title="Fill as much space as possible without overlapping the buttons">FIT</button>
+				<div id="zoom-pad">
+					<button class="nav-btn" id="zoom-in" title="Zoom in">+</button>
+					<button class="nav-btn" id="zoom-out" title="Zoom out">&minus;</button>
+				</div>
+			</div>
+
+			<div id="insights-panel" class="hidden">
+				<button id="insights-close">&times;</button>
+				<h3>Data Insights</h3>
+				<div id="insights-body"></div>
+			</div>
+
+			<!-- ================= HELP GUIDE OVERLAY ================= -->
+			<div id="help-overlay" class="hidden">
+				<div id="help-card">
+					<button id="help-close">&times;</button>
+					<h2>How to use this page</h2>
+
+					<h3>Moving around</h3>
+					<ul>
+						<li><strong>Left-click + drag:</strong> rotate the view</li>
+						<li><strong>Right-click + drag:</strong> pan the view</li>
+						<li><strong>Scroll wheel:</strong> zoom in/out</li>
+						<li><strong>Arrow keys or the on-screen arrow pad:</strong> move/rotate - behaves a bit differently per shape (Table pans, Sphere/Helix rotate, Grid steps through depth layers)</li>
+						<li><strong>FIT (bottom-right):</strong> fills as much of the screen as possible with the shape, without overlapping the buttons</li>
+						<li><strong>RESET:</strong> snaps back to a clean, centered view of whatever shape is active</li>
+						<li><strong>Click a tile:</strong> opens that person's full profile</li>
+					</ul>
+
+					<h3>Toolbar buttons (top-right)</h3>
+					<ul>
+						<li><strong>Manage Data:</strong> opens the Google Sheet directly - add, edit, or remove people there</li>
+						<li><strong>Refresh:</strong> after editing the Sheet, click this to load your changes here - no page reload or re-signing in needed</li>
+						<li><strong>Insights:</strong> a quick summary of the current data (totals, averages, top categories)</li>
+						<li><strong>Sign Out:</strong> ends your session</li>
+					</ul>
+
+					<h3>Good to know</h3>
+					<p>Switching between Table / Sphere / Helix / Grid automatically re-centers the camera. Tile colors show net worth: red (below $100K), orange ($100K-$200K), green (above $200K).</p>
+				</div>
+			</div>
+		</div>
+
+		<!-- ================= PROFILE POPUP (click a tile) ================= -->
+		<div id="profile-modal" class="hidden">
+			<div id="profile-card">
+				<button id="profile-close">&times;</button>
+				<button id="profile-prev" class="profile-nav">&#8592;</button>
+				<img id="profile-photo" src="" alt="">
+				<h2 id="profile-name"></h2>
+				<p id="profile-details"></p>
+				<button id="profile-next" class="profile-nav">&#8594;</button>
 			</div>
 		</div>
 
@@ -45,7 +132,7 @@
 			}
 		</script>
 
-		<script type="module" src="js/main.js"></script>
+		<script type="module" src="js/main.js?v=28"></script>
 
 	</body>
 </html>
