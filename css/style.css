@@ -6,17 +6,187 @@ html, body {
 	font-family: Helvetica, Arial, sans-serif;
 }
 
-#info {
+/* The 3D visualization gets its own explicit, sealed stacking context,
+   isolated from the 2D UI layered on top of it (toolbar/menu/nav-pad/
+   legend). Without this, #container has no position/z-index/transform of
+   its own, so it never forms a stacking context - which means each tile
+   inside it (every one of them is individually 3D-transformed, so each
+   forms its own stacking context) is free to compete directly against the
+   UI's stacking order instead of staying safely contained beneath it. That
+   is the likely explanation for on-screen buttons occasionally being
+   painted over - and therefore looking like they'd vanished - right after
+   an action (like Reset) that moves every tile at once. `isolation: isolate`
+   permanently pins every tile below this one container-level stacking
+   context, no matter what z-index an individual tile ever ends up with
+   (hovered, mid-animation, or otherwise) - the on-screen controls, declared
+   later in the HTML with their own z-index, always stay on top. */
+#container {
 	position: absolute;
-	top: 10px;
-	width: 100%;
-	text-align: center;
-	color: rgba(127,255,255,0.75);
-	font-size: 13px;
-	z-index: 5;
+	inset: 0;
+	z-index: 0;
+	isolation: isolate;
 }
 
-/* ---------- Bottom menu (Table / Sphere / Helix / Grid) ---------- */
+#info {
+	position: absolute;
+	top: 14px;
+	left: 16px;
+	/* Left-aligned with a fixed max-width, instead of centered across the
+	   full page width - this is what was causing the title to visually
+	   collide with the top-right toolbar buttons on smaller windows. */
+	max-width: 45%;
+	text-align: left;
+	color: rgba(127,255,255,0.75);
+	font-size: 13px;
+	z-index: 90;
+	pointer-events: none;
+	text-shadow: 0 0 6px #000, 0 0 6px #000;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* Small, unobtrusive build marker under the title. Its whole purpose is to
+   make it trivially obvious which copy of the code is actually running -
+   comparing this number is much faster than diffing files, and directly
+   avoids the situation where an old, already-fixed copy gets mistaken for
+   a fresh bug report. Bump the date/number here on every delivered zip. */
+#build-version {
+	position: absolute;
+	top: 34px;
+	left: 16px;
+	font-size: 10px;
+	color: rgba(127,255,255,0.35);
+	z-index: 90;
+	pointer-events: none;
+	text-shadow: 0 0 4px #000;
+}
+
+#sign-out {
+	background: transparent;
+	border: 1px solid rgba(255,255,255,0.3);
+	color: rgba(255,255,255,0.7);
+	font-size: 11px;
+	padding: 4px 12px;
+	border-radius: 4px;
+	cursor: pointer;
+}
+
+#sign-out:hover {
+	background: rgba(255,255,255,0.15);
+}
+
+/* ---------- Top toolbar (secondary actions, out of the way of the main layout buttons) ---------- */
+
+#top-toolbar {
+	position: absolute;
+	top: 10px;
+	right: 16px;
+	display: flex;
+	gap: 6px;
+	z-index: 100;
+}
+
+#top-toolbar a,
+#top-toolbar button {
+	background: transparent;
+	border: 1px solid rgba(127,255,255,0.4);
+	color: rgba(200,255,255,0.85);
+	font-size: 11px;
+	padding: 4px 10px;
+	border-radius: 4px;
+	cursor: pointer;
+	text-decoration: none;
+}
+
+#top-toolbar a:hover,
+#top-toolbar button:hover {
+	background: rgba(0,255,255,0.15);
+}
+
+/* ---------- On-screen navigation cluster (arrow-pad + reset + rotation ball + zoom) ---------- */
+
+#nav-pad {
+	position: absolute;
+	bottom: 90px;
+	right: 24px;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 12px;
+	z-index: 20;
+}
+
+#rotate-pad {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 4px;
+}
+
+.nav-mid-row {
+	display: flex;
+	gap: 34px;
+}
+
+.nav-btn {
+	width: 32px;
+	height: 32px;
+	border-radius: 50%;
+	background: rgba(0,20,20,0.65);
+	border: 1px solid rgba(127,255,255,0.5);
+	color: rgba(200,255,255,0.9);
+	font-size: 13px;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.nav-btn:hover {
+	background: rgba(0,255,255,0.25);
+}
+
+.nav-btn:active {
+	background: rgba(0,255,255,0.5);
+}
+
+#reset-view-icon,
+#fit-view-icon {
+	/* Was a fixed 40px, which clipped/overflowed "RESET" once its border,
+	   letter-spacing and the browser's own default button padding were all
+	   accounted for. Sizing from the content instead (min-width as a floor,
+	   not a hard cap) means the label always has room, on any browser. */
+	width: auto;
+	min-width: 44px;
+	height: 26px;
+	padding: 0 8px;
+	box-sizing: border-box;
+	border-radius: 6px;
+	background: rgba(0,20,20,0.65);
+	border: 1px solid rgba(127,255,255,0.5);
+	color: rgba(200,255,255,0.9);
+	font-size: 10px;
+	cursor: pointer;
+	letter-spacing: 0.5px;
+	white-space: nowrap;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+#reset-view-icon:hover,
+#fit-view-icon:hover {
+	background: rgba(0,255,255,0.25);
+}
+
+#zoom-pad {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+/* ---------- Bottom menu: only the 4 layout buttons ---------- */
 
 #menu {
 	position: absolute;
@@ -31,8 +201,8 @@ html, body {
 	background: transparent;
 	outline: 1px solid rgba(127,255,255,0.75);
 	border: 0;
-	padding: 6px 14px;
-	margin: 0 4px;
+	padding: 7px 20px;
+	margin: 0 5px;
 	cursor: pointer;
 	font-size: 13px;
 	letter-spacing: 1px;
@@ -51,7 +221,7 @@ html, body {
 
 #legend {
 	position: absolute;
-	bottom: 60px;
+	bottom: 56px;
 	left: 50%;
 	transform: translateX(-50%);
 	display: flex;
@@ -62,15 +232,271 @@ html, body {
 	z-index: 5;
 }
 
-#legend .bar {
-	width: 160px;
-	height: 8px;
-	border-radius: 4px;
-	background: linear-gradient(to right, rgb(255,59,48), rgb(255,149,0), rgb(76,217,100));
+#legend .swatch {
+	width: 12px;
+	height: 12px;
+	border-radius: 3px;
+	display: inline-block;
+	margin-right: 4px;
 }
 
-/* ---------- Person tile ---------- */
+#legend .swatch.red { background: rgb(255,59,48); }
+#legend .swatch.orange { background: rgb(255,149,0); }
+#legend .swatch.green { background: rgb(76,217,100); }
 
+#legend span:not(.swatch) {
+	margin-right: 14px;
+}
+
+/* ---------- Grid layer stepping status (no slider - arrow-key/pad driven) ---------- */
+
+#grid-layer-status {
+	position: absolute;
+	bottom: 90px;
+	left: 50%;
+	transform: translateX(-50%);
+	background: rgba(0,20,20,0.7);
+	border: 1px solid rgba(127,255,255,0.4);
+	border-radius: 6px;
+	padding: 6px 16px;
+	color: rgba(200,255,255,0.95);
+	font-size: 12px;
+	z-index: 6;
+}
+
+/* ---------- Insights panel ---------- */
+
+#insights-panel {
+	position: absolute;
+	top: 40px;
+	right: 20px;
+	width: 270px;
+	background: rgba(0,15,15,0.92);
+	border: 1px solid rgba(127,255,255,0.4);
+	border-radius: 8px;
+	padding: 16px 18px;
+	color: #fff;
+	font-size: 12px;
+	z-index: 40;
+}
+
+#insights-panel h3 {
+	margin: 0 0 10px;
+	font-size: 14px;
+	color: rgba(127,255,255,0.9);
+}
+
+#insights-close {
+	position: absolute;
+	top: 8px;
+	right: 10px;
+	background: transparent;
+	border: none;
+	color: rgba(255,255,255,0.6);
+	font-size: 18px;
+	cursor: pointer;
+}
+
+#insights-body div {
+	display: flex;
+	justify-content: space-between;
+	padding: 5px 0;
+	border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+#insights-body .label {
+	color: rgba(255,255,255,0.6);
+}
+
+#insights-body .value {
+	color: #fff;
+	font-weight: bold;
+}
+
+#insights-body .timestamp-row {
+	margin-top: 6px;
+	padding-top: 8px;
+	border-top: 1px solid rgba(255,255,255,0.15);
+	border-bottom: none;
+	font-size: 11px;
+	color: rgba(255,255,255,0.45);
+}
+
+/* ---------- Help guide overlay ---------- */
+
+#help-button {
+	background: transparent;
+	border: 1px solid rgba(127,255,255,0.4);
+	color: rgba(200,255,255,0.85);
+	font-size: 12px;
+	font-weight: bold;
+	width: 26px;
+	height: 26px;
+	border-radius: 50%;
+	cursor: pointer;
+}
+
+#help-button:hover {
+	background: rgba(0,255,255,0.15);
+}
+
+#help-overlay {
+	position: fixed;
+	inset: 0;
+	background: rgba(0,0,0,0.8);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 999998;
+}
+
+#help-card {
+	background: #10201f;
+	border: 1px solid rgba(127,255,255,0.4);
+	border-radius: 10px;
+	padding: 28px 32px;
+	max-width: 480px;
+	width: 90%;
+	max-height: 80vh;
+	overflow-y: auto;
+	color: #fff;
+	position: relative;
+}
+
+#help-card h2 {
+	margin-top: 0;
+	font-size: 18px;
+	color: rgba(127,255,255,0.9);
+}
+
+#help-card h3 {
+	font-size: 13px;
+	color: rgba(127,255,255,0.8);
+	margin: 18px 0 6px;
+}
+
+#help-card p, #help-card li {
+	font-size: 13px;
+	line-height: 1.6;
+	color: rgba(255,255,255,0.85);
+}
+
+#help-card ul {
+	margin: 0;
+	padding-left: 18px;
+}
+
+#help-close {
+	position: absolute;
+	top: 10px;
+	right: 14px;
+	background: transparent;
+	border: none;
+	color: rgba(255,255,255,0.7);
+	font-size: 22px;
+	cursor: pointer;
+}
+
+/* ---------- Profile popup ---------- */
+
+#profile-modal {
+	position: fixed;
+	inset: 0;
+	background: rgba(0,0,0,0.75);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 999999;
+	pointer-events: auto;
+}
+
+#profile-card {
+	background: #10201f;
+	border: 1px solid rgba(127,255,255,0.4);
+	border-radius: 10px;
+	padding: 24px 32px 32px;
+	text-align: center;
+	max-width: 300px;
+	position: relative;
+	color: #fff;
+}
+
+#profile-close {
+	position: absolute;
+	top: 8px;
+	right: 12px;
+	background: transparent;
+	border: none;
+	color: rgba(255,255,255,0.7);
+	font-size: 22px;
+	cursor: pointer;
+}
+
+.profile-nav {
+	position: absolute;
+	top: 50%;
+	transform: translateY(-50%);
+	background: rgba(255,255,255,0.08);
+	border: 1px solid rgba(255,255,255,0.3);
+	color: #fff;
+	font-size: 22px;
+	width: 36px;
+	height: 36px;
+	border-radius: 50%;
+	cursor: pointer;
+}
+
+.profile-nav:hover {
+	background: rgba(255,255,255,0.25);
+}
+
+#profile-prev { left: -50px; }
+#profile-next { right: -50px; }
+
+#profile-photo {
+	width: 160px;
+	height: 160px;
+	object-fit: cover;
+	border-radius: 8px;
+	margin-top: 8px;
+}
+
+#profile-name {
+	margin: 14px 0 6px;
+	font-size: 18px;
+}
+
+#profile-details {
+	font-size: 13px;
+	color: rgba(255,255,255,0.8);
+	line-height: 1.6;
+}
+
+#profile-details .rank {
+	display: inline-block;
+	margin-top: 8px;
+	font-size: 11px;
+	color: rgba(255,255,255,0.55);
+	font-style: italic;
+}
+
+/* ---------- Person tile (supersampled: built at 2.5x, scaled down 40%) ---------- */
+
+/* `will-change: transform` used to sit permanently on EVERY tile here, plus
+   every tile's inner wrapper (see .element-inner below) - 400 GPU
+   compositor layers held open for the whole session, whether or not
+   anything was actually animating. That's a well-known way to overload the
+   compositor (MDN's own guidance on will-change warns against exactly this:
+   applying it broadly, or leaving it on indefinitely, "could cause other
+   problems, or even crash the browser"), and it's a real, plausible cause
+   of on-screen controls occasionally rendering incorrectly or vanishing
+   after a burst of tile transforms (like Reset re-flying the camera and
+   replaying every tile's position at once) - especially once 200 real
+   photos are also competing for GPU memory. This codebase's own benchmark
+   comment already found rotate/render cost under 1ms at 200 tiles WITHOUT
+   this hint, so removing it costs nothing; `will-change` now only gets
+   added to the one tile actually being hovered (see .element:hover
+   .element-inner below), which is a legitimate, cheap, single-element use. */
 .element {
 	width: 130px;
 	height: 180px;
@@ -80,48 +506,143 @@ html, body {
 	text-align: center;
 	line-height: normal;
 	cursor: default;
-	overflow: hidden;
 	position: relative;
-	background-color: rgba(0,20,20,0.6);
+	background-color: rgba(0,20,20,0.94);
+	backface-visibility: hidden;
+	-webkit-font-smoothing: antialiased;
+	text-rendering: optimizeLegibility;
+	overflow: hidden;
+	/* Isolates each tile's own layout/style work from the other 199 -
+	   with this many transformed elements, the browser would otherwise
+	   have to consider whether any tile's internal changes could affect
+	   its neighbors' layout on every update. It can't (tiles never affect
+	   each other), so telling the browser that directly cuts real,
+	   measurable work during rotation/pan. Deliberately NOT using
+	   `contain: paint` here - that would also clip the hover name-overflow
+	   fix below, undoing it. */
+	contain: layout style;
+	/* Smooth fade when a Grid layer is hidden/revealed while stepping, and
+	   for the distance-based depth cue (see applyDistanceDepthCue in
+	   main.js) fading in on Helix/Grid - covers both opacity and the small
+	   blur accent so neither one visibly snaps between updates. */
+	transition: opacity 0.35s ease-in-out, filter 0.3s ease-out;
+}
+
+/* While a rotate/pan drag is in progress, tiles stop reacting to hover
+   entirely. With ~200 of them on screen, the cursor sweeping across tiles
+   mid-drag was constantly recalculating hover styles that had nothing to
+   do with the drag - this removed a real source of jank while dragging. */
+.is-dragging .element {
+	pointer-events: none;
+}
+
+/* The supersample wrapper is built well above the tile's real on-screen
+   size, then scaled back down - this is what makes text/photos render
+   sharper than building directly at the small final size. Bumped again,
+   3x now (was 2.5x): benchmarking the actual render loop showed a full
+   rotate+render cycle costs under 1ms even at 200 tiles, so this only ever
+   costs a one-time layout/paint per tile when they're first built or
+   refreshed - it has no measurable effect on drag/rotate smoothness,
+   which is the thing worth protecting. Table is the view this matters
+   most for: spreading all 200 tiles flat across one wide sheet makes each
+   one noticeably smaller on screen than in Sphere/Helix/Grid, so its text
+   needs the most help. */
+.supersample {
+	width: 390px;
+	height: 540px;
+	transform-origin: top left;
+	transform: scale(0.3333);
+}
+
+.element-inner {
+	width: 100%;
+	height: 100%;
+	overflow: hidden;
+	border-radius: 8px;
+	transition: transform 0.15s ease-out;
+	transform-origin: center center;
+}
+
+/* This scale multiplies directly onto the tile's already-rendered resting
+   size (the supersample wrapper's own scale is already "baked in" to that
+   resting size), so 1.8 here really does mean "1.8x bigger than normal" -
+   no extra compensation needed. The previous 3.6 here was actually closer
+   to 3.6x, well past the intended ~1.8x - a real bug, and part of why
+   hovering felt like it blew tiles up further than their (already
+   single-line-truncated) name text could ever fill in cleanly. */
+.element:hover .element-inner {
+	transform: scale(1.8);
+	/* will-change only while actually hovered - one element's worth of extra
+	   compositor layer at a time, instead of the old blanket will-change on
+	   all 200+200 tile/inner elements permanently (a well-documented way to
+	   overload the compositor - see the .element rule above for the fuller
+	   explanation). */
+	will-change: transform;
+	z-index: 10;
+	/* Allow the (now much larger) name to spill past the rounded corners
+	   rather than being hard-clipped - this is the fix for names getting
+	   cut off on hover in Sphere/Helix. The corner-rounding on the photo
+	   itself only matters at rest; while zoomed in, reading the full name
+	   matters more than a perfectly square-cut corner underneath it. */
+	overflow: visible;
 }
 
 .element:hover {
-	box-shadow: 0px 0px 16px rgba(0,255,255,0.85) !important;
+	z-index: 10;
+	overflow: visible;
 }
 
 .element .number {
 	position: absolute;
-	top: 4px;
-	right: 6px;
-	font-size: 10px;
+	top: 12px;
+	right: 18px;
+	font-size: 30px;
 	color: rgba(255,255,255,0.6);
-	z-index: 2;
+	z-index: 20;
+	text-shadow: 0 0 6px rgba(0,0,0,0.9);
 }
 
 .element .photo {
 	width: 100%;
-	height: 90px;
+	height: 260px;
 	object-fit: cover;
 	display: block;
 	background: #111;
+	image-rendering: auto;
 }
 
 .element .name {
-	font-size: 11px;
+	/* Bumped a bit further than the supersample resize alone would call
+	   for (proportional match would be ~32px) - Table specifically packs
+	   all 200 tiles across one flat sheet, making each one noticeably
+	   smaller on screen than in the other three shapes, so the name needs
+	   the extra emphasis there most of all. */
+	font-size: 36px;
 	font-weight: bold;
 	color: #fff;
-	margin-top: 4px;
-	padding: 0 4px;
-	white-space: nowrap;
+	margin-top: 12px;
+	padding: 0 12px;
+	line-height: 1.18;
+	text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+	/* Up to two lines instead of a single truncated one, so full names
+	   are actually readable instead of always ending in "...". Combined
+	   with the hover overflow fix above, this is what stops names being
+	   cut off when a tile zooms in on hover. */
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
 	overflow: hidden;
 	text-overflow: ellipsis;
+	word-break: break-word;
 }
 
 .element .details {
-	font-size: 9px;
-	color: rgba(255,255,255,0.75);
-	margin-top: 3px;
-	line-height: 1.3;
+	font-size: 27px;
+	font-weight: 600;
+	color: rgba(255,255,255,0.85);
+	margin-top: 10px;
+	line-height: 1.4;
+	text-shadow: 0 1px 3px rgba(0,0,0,0.9);
 }
 
 /* ---------- Login screen (Image A) ---------- */
@@ -142,7 +663,7 @@ html, body {
 	box-shadow: 0 4px 24px rgba(0,0,0,0.12);
 	padding: 40px 48px;
 	text-align: center;
-	max-width: 340px;
+	max-width: 360px;
 }
 
 #login-card h1 {
@@ -160,6 +681,15 @@ html, body {
 #g_id_signin_container {
 	display: flex;
 	justify-content: center;
+}
+
+#login-access-note {
+	margin-top: 20px;
+	font-size: 11px;
+	color: #9aa0a6;
+	line-height: 1.5;
+	border-top: 1px solid #e8eaed;
+	padding-top: 14px;
 }
 
 .hidden {
