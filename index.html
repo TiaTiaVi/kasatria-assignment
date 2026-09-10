@@ -4,7 +4,17 @@
 		<title>Kasatria People Visualization</title>
 		<meta charset="utf-8">
 		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
-		<link type="text/css" rel="stylesheet" href="css/style.css?v=24">
+		<link type="text/css" rel="stylesheet" href="css/style.css?v=35">
+		<!-- Opens the connection to each third-party host as early as possible
+		     (DNS + TLS handshake), before we actually need anything from them -
+		     the Google sign-in script, the live Sheets data fetch, and every
+		     person's photo all come from these two hosts. Shaves the
+		     connection-setup latency off of whichever of those requests fires
+		     first, which is the biggest single lever on how fast the page
+		     feels ready, without changing what loads or when. -->
+		<link rel="preconnect" href="https://accounts.google.com">
+		<link rel="preconnect" href="https://sheets.googleapis.com">
+		<link rel="preconnect" href="https://static.kasatria.com" crossorigin>
 		<script src="https://accounts.google.com/gsi/client" async defer></script>
 	</head>
 	<body>
@@ -14,10 +24,16 @@
 			<div id="login-card">
 				<h1>Welcome Back</h1>
 				<p>Sign in with Google to view the visualization.</p>
+				<!-- Short, one-line explainer of what this site even is - shown once,
+				     here on the login screen, rather than as a persistent banner inside
+				     the 3D view itself, so it doesn't compete with the visualization for
+				     space on every single visit. -->
+				<p id="login-description">Kasatria People Visualization turns member net-worth data into an explorable 3D shape - browse everyone as a Table, Sphere, Helix, or Grid, colored by net worth.</p>
 				<div id="g_id_signin_container"></div>
 				<div id="login-access-note">
 					Access is currently limited to approved accounts. If you can't sign in,
-					contact the site owner chyntiavy@gmail.com to be added.
+					contact the site owner to be added.
+					<br>Questions or feedback? <a href="mailto:chyntiavy@gmail.com">chyntiavy@gmail.com</a>
 				</div>
 			</div>
 		</div>
@@ -25,7 +41,6 @@
 		<!-- ================= 3D VISUALIZATION (hidden until login) ================= -->
 		<div id="app" class="hidden">
 			<div id="info">Kasatria People Visualization</div>
-			<div id="build-version" title="Confirms which build of the code is actually running - if you're ever unsure whether you're looking at an up-to-date copy, this number is the fastest way to check">Build 2026-09-08.1</div>
 
 			<div id="top-toolbar">
 				<a id="open-sheet" href="https://docs.google.com/spreadsheets/d/1--mvJzdnU1cNuQRJrqOzJOSAL7WiesR-laX4iBEav8s/edit" target="_blank" rel="noopener" title="Add, edit, or remove people here">Manage Data</a>
@@ -37,15 +52,31 @@
 
 			<div id="container"></div>
 
+			<!-- Shown from the instant sign-in succeeds until the first batch of
+			     people has actually loaded and the shape is built - without
+			     this, that gap (a Google Sheets fetch, sometimes a couple of
+			     seconds) was a plain black screen with only the toolbar/nav
+			     visible, which reads as "did this actually work?" rather than
+			     "still loading" (shown/hidden directly in startApp() in main.js). -->
+			<div id="loading-overlay">
+				<div id="loading-spinner"></div>
+				<div id="loading-text">Loading people&hellip;</div>
+			</div>
+
 			<div id="legend">
 				<span class="swatch red"></span><span>Below $100K</span>
 				<span class="swatch orange"></span><span>$100K - $200K</span>
 				<span class="swatch green"></span><span>Above $200K</span>
 			</div>
 
-			<!-- Shown only while stepping through Grid's depth layers with the
-			     arrow keys / arrow-pad - no slider, navigation is keyboard/pad-driven. -->
+			<!-- Only shown once Grid's Layer mode is actually turned on (see
+			     #grid-layer-toggle below): a short "Layer X of N" status line
+			     plus a row of clickable layer dots (populated in main.js -
+			     renderGridLayerDots) so any layer can be jumped to directly,
+			     instead of only being reachable by stepping one at a time with
+			     the arrow keys/pad. -->
 			<div id="grid-layer-status" class="hidden"></div>
+			<div id="grid-layer-dots" class="hidden"></div>
 
 			<div id="menu">
 				<button id="table">TABLE</button>
@@ -66,6 +97,14 @@
 					</div>
 					<button class="nav-btn" id="rotate-down" title="Down">&#9660;</button>
 				</div>
+				<!-- Grid-only: toggles Layer mode (step through Grid's depth layers
+				     one at a time) on/off - only ever visible while Grid is the
+				     active shape (see updateGridLayerUI in main.js). While it's on,
+				     the up/down icons above dim to show they're inactive and
+				     left/right highlight to show they now step layers instead of
+				     rotating - see the .is-inactive/.is-layer-nav rules in
+				     style.css. -->
+				<button id="grid-layer-toggle" class="hidden" title="Step through Grid's depth layers one at a time">LAYERS</button>
 				<button id="reset-view-icon" title="Reset the view">RESET</button>
 				<button id="fit-view-icon" title="Fill as much space as possible without overlapping the buttons">FIT</button>
 				<div id="zoom-pad">
@@ -86,11 +125,13 @@
 					<button id="help-close">&times;</button>
 					<h2>How to use this page</h2>
 
+					<p id="help-intro">Kasatria People Visualization is an interactive 3D way to browse members: each tile is one person, colored by net worth, arranged into a Table, Sphere, Helix, or Grid shape you can rotate and explore.</p>
+
 					<h3>Moving around</h3>
 					<ul>
-						<li><strong>Left-click + drag:</strong> rotate the view</li>
+						<li><strong>Left-click + drag:</strong> rotate the view - on the Helix, this is also how you swing around the coil to bring its other strand into view</li>
 						<li><strong>Right-click + drag:</strong> pan the view</li>
-						<li><strong>Scroll wheel:</strong> zoom in/out</li>
+						<li><strong>Scroll wheel:</strong> zoom in/out on Table, Sphere, and Helix. On Grid, it instead pages through the depth layers one at a time - scroll all the way to move all the way to the back; hold Ctrl/Cmd while scrolling (or pinch on a trackpad) to zoom Grid instead</li>
 						<li><strong>Arrow keys or the on-screen arrow pad:</strong> move/rotate - behaves a bit differently per shape (Table pans, Sphere/Helix rotate, Grid steps through depth layers)</li>
 						<li><strong>FIT (bottom-right):</strong> fills as much of the screen as possible with the shape, without overlapping the buttons</li>
 						<li><strong>RESET:</strong> snaps back to a clean, centered view of whatever shape is active</li>
@@ -106,7 +147,9 @@
 					</ul>
 
 					<h3>Good to know</h3>
-					<p>Switching between Table / Sphere / Helix / Grid automatically re-centers the camera. Tile colors show net worth: red (below $100K), orange ($100K-$200K), green (above $200K).</p>
+					<p>Switching between Table / Sphere / Helix / Grid automatically re-centers the camera. Tile colors show net worth: red (below $100K), orange ($100K-$200K), green (above $200K). The Helix is a true double helix - two strands wound around the same axis, 180&deg; apart - so rotating it swaps which strand is currently facing you. Every tile is a solid, two-sided card - the side facing you is full strong color, the side facing away is a dimmed version of the same color - so the shape itself reads as 3D without relying on distance alone. On Sphere, Helix, and Grid, tiles closer to you also fade slightly as they recede, adding to that depth cue.</p>
+
+					<div id="help-contact">Questions or feedback? Contact <a href="mailto:chyntiavy@gmail.com">chyntiavy@gmail.com</a></div>
 				</div>
 			</div>
 		</div>
@@ -132,7 +175,7 @@
 			}
 		</script>
 
-		<script type="module" src="js/main.js?v=28"></script>
+		<script type="module" src="js/main.js?v=41"></script>
 
 	</body>
 </html>

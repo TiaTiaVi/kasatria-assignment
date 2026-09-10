@@ -2,8 +2,11 @@
 // of using a hardcoded copy. This is what Instruction #3 in the assignment
 // requires: "retrieve the data from your Google Sheet."
 
-const GOOGLE_SHEETS_API_KEY = 'AIzaSyDe8umDrrSuy7TLerHlE-dmda7yCwm6oSA';
-const SPREADSHEET_ID = '1--mvJzdnU1cNuQRJrqOzJOSAL7WiesR-laX4iBEav8s';
+// The API key and Sheet ID live in config.js, which is NOT committed to
+// GitHub (see js/config.example.js and README.md's "API keys & GitHub"
+// section) - this file only ever imports them, it never states them
+// directly, so there's nothing here for a `git push` to leak.
+import { GOOGLE_SHEETS_API_KEY, SPREADSHEET_ID } from './config.js';
 
 // Google's own docs are upfront that the Sheets API can return a transient
 // 503 ("The service is currently unavailable") or 429 (rate limited) even

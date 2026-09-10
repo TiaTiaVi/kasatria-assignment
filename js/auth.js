@@ -10,10 +10,13 @@
 //    already confirmed their identity, so we treat that as "logged in" and
 //    reveal the visualization.
 
-// ==== IMPORTANT: replace this with your own OAuth Client ID from Google Cloud ====
-// This value is safe to have public - it's not a secret (see the conversation
-// history / README for why). It just tells Google which registered app this is.
-const GOOGLE_CLIENT_ID = '273585124672-loolmavnq7jssoqoneu6q6c70mh41v7b.apps.googleusercontent.com';
+// The OAuth Client ID lives in config.js (see js/config.example.js) purely
+// to keep all three of this app's Google identifiers in one place - unlike
+// the Sheets API key, this one was never actually a secret to begin with
+// (it's meant to be public; it just tells Google which registered app this
+// is - see README.md's "API keys & GitHub" section for the full
+// explanation of which of this app's values are/aren't secrets, and why).
+import { GOOGLE_CLIENT_ID } from './config.js';
 
 let onLoginSuccess = null;
 

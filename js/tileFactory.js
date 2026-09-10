@@ -2,17 +2,45 @@ import { CSS3DObject } from 'three/addons/renderers/CSS3DRenderer.js';
 
 // Turns a net worth number into a color, per the assignment:
 // Red < $100K, Orange > $100K, Green > $200K
+//
+// These are deliberately deeper/darker shades than a "pure" bright red/
+// orange/green - the original bright versions (255,59,48 / 255,149,0 /
+// 76,217,100) look good as flat color swatches, but the white text sitting
+// directly ON TOP of them (name/details - see style.css) had genuinely poor
+// contrast: measured against WCAG's standard contrast-ratio formula, white
+// text on the old orange was only ~2.2:1 and on the old green only ~1.8:1
+// (the accepted minimum for normal-size text is 4.5:1 - anything under that
+// is a real readability problem, not just a style preference, and it only
+// gets worse the smaller each tile renders on screen). These deeper shades
+// keep the same red/orange/green identity (still clearly "red", "orange",
+// "green" at a glance) while giving white text 5.2-6.5:1 contrast against
+// every one of them - comfortably above the readable threshold even at a
+// tile's smallest on-screen size.
 function getNetWorthColor( netWorth ) {
 
-	if ( netWorth > 200000 ) return { name: 'green', rgb: '76, 217, 100' };
-	if ( netWorth > 100000 ) return { name: 'orange', rgb: '255, 149, 0' };
-	return { name: 'red', rgb: '255, 59, 48' };
+	if ( netWorth > 200000 ) return { name: 'green', rgb: '24, 120, 58' };
+	if ( netWorth > 100000 ) return { name: 'orange', rgb: '166, 88, 10' };
+	return { name: 'red', rgb: '176, 44, 38' };
 
 }
 
 function formatCurrency( netWorth ) {
 
 	return '$' + netWorth.toLocaleString( 'en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 } );
+
+}
+
+// Darkens/desaturates an "R, G, B" string toward black by `factor` (0-1) -
+// used to build the tile's BACK face color from its front face color, so
+// the two stay a matched pair (same hue family, just dimmer) instead of two
+// independently-chosen colors that could drift out of sync if one were ever
+// retuned without the other.
+function dimColor( rgb, factor ) {
+
+	const [ r, g, b ] = rgb.split( ',' ).map( n => parseFloat( n ) );
+	const dim = ( channel ) => Math.round( channel * factor );
+
+	return `${ dim( r ) }, ${ dim( g ) }, ${ dim( b ) }`;
 
 }
 
@@ -25,19 +53,63 @@ function buildTile( person, index, onClick ) {
 
 	const element = document.createElement( 'div' );
 	element.className = 'element';
-	element.style.borderColor = `rgba(${ color.rgb }, 0.9)`;
 
-	// SOLID tile background (per the assignment's own reference image): a
-	// mostly-opaque net-worth-colored panel over a dark backing, rather than
-	// the old 18%-alpha wash. Two consequences of that old near-transparent
-	// background: (1) tiles barely read as "colored" at all - the red/orange/
-	// green signal was much fainter than intended, and (2) in Grid especially,
-	// with real depth (10 layers), seeing mostly-see-through tiles let
-	// several layers' worth of card outlines blend together into a smeared,
-	// hard-to-read mess - "solid" here also directly fixes that, since an
-	// opaque front tile now fully hides whatever sits behind it, the same way
-	// a real printed card would.
-	element.style.backgroundColor = `rgba(${ color.rgb }, 0.94)`;
+	// TRUE TWO-SIDED CARD: `element` itself is now just an empty 3D "stage"
+	// (see `transform-style: preserve-3d` on .element in style.css) holding
+	// two separate, individually-rotated face divs - .face-front (this
+	// tile's real content, dead ahead) and .face-back (rotated 180deg
+	// around Y, permanently facing the opposite way). Each face also gets
+	// `backface-visibility: hidden`, so the browser itself - not our own
+	// per-frame JS - decides which one is actually painted, purely from
+	// each tile's real 3D orientation in the scene: whichever face is
+	// currently pointed toward the camera shows, the other one doesn't cost
+	// a single extra paint. This directly replaces the old approach, which
+	// had only ONE face (this same content, mirrored by the browser's
+	// default backface behavior when a tile happened to be facing away) and
+	// leaned on a separate, continuously-recomputed JS "depth cue"
+	// (see applyDistanceDepthCue in main.js) to dim things down - and that
+	// depth cue's real bug is exactly what motivated this change: it dims
+	// tiles by raw DISTANCE from the camera, which has nothing to do with
+	// which way a tile is actually facing, so a tile that's genuinely
+	// facing the camera (the "front" of the shape) but simply sits a bit
+	// farther back than average got dimmed right along with tiles that are
+	// truly facing away - "the front also gets dim", the exact complaint
+	// this redesign fixes. Now the strong/dim distinction is tied to the
+	// one thing that should actually control it (which side is facing you),
+	// not to distance, so Sphere and Helix no longer run that per-frame
+	// dimming pass at all (see maybeUpdateDepthCue in main.js) - the browser's
+	// own 3D compositing handles it, every frame, for free.
+	//
+	// Cost check: a full 6-faced extruded box (every side of a real cube)
+	// was tried once before for a different request and reverted - 200
+	// tiles x 6 faces = 1200 always-composited layers measurably hurt frame
+	// time. This is deliberately NOT that: two flat faces per tile (400
+	// layers total for 200 people), not six, specifically because only
+	// "which of two sides is showing" is needed here, not a full box.
+	// Benchmarked with a headless render-loop test at 200 tiles: this
+	// change measurably IMPROVED average frame time (see README's "Round 2"
+	// section for the actual before/after numbers) - removing the old
+	// per-frame distance-dimming JS pass more than paid for the extra DOM.
+	const faceFront = document.createElement( 'div' );
+	faceFront.className = 'face face-front';
+	faceFront.style.borderColor = `rgba(${ color.rgb }, 0.9)`;
+	// SOLID tile background - fully opaque, so nothing directly behind a
+	// tile ever bleeds through, the way a real printed card would.
+	faceFront.style.backgroundColor = `rgba(${ color.rgb }, 1)`;
+	element.appendChild( faceFront );
+
+	const faceBack = document.createElement( 'div' );
+	faceBack.className = 'face face-back';
+	// The BACK face's color is the exact same hue, just darkened - see
+	// dimColor() above - rather than a flat generic grey, so the back of a
+	// green (high net worth) tile still reads as "the back of a green
+	// tile", not as an unrelated color. This is the concrete "front strong
+	// colour, back dimmed colour" tile design, built once here per tile
+	// instead of recomputed every frame in JS.
+	const backRgb = dimColor( color.rgb, 0.32 );
+	faceBack.style.borderColor = `rgba(${ backRgb }, 0.9)`;
+	faceBack.style.backgroundColor = `rgba(${ backRgb }, 1)`;
+	element.appendChild( faceBack );
 
 	if ( onClick ) {
 
@@ -46,19 +118,29 @@ function buildTile( person, index, onClick ) {
 		// Store the person's data directly on this DOM node - main.js reads this
 		// back to figure out who was clicked, using a more reliable detection
 		// method than a plain listener on the tile itself (see main.js for why).
+		// Deliberately still on the OUTER `element`, not either face: main.js
+		// looks this up with `.closest('.element')` starting from whatever was
+		// actually under the cursor (front face or back face, whichever was
+		// visible) - one shared lookup that works no matter which side someone
+		// clicked, instead of duplicating this data onto both faces.
 		element._person = person;
 
 	}
 
 	// SUPERSAMPLING for sharper tiles: we build all the visual content at
 	// DOUBLE size (260x360 instead of 130x180), then scale the whole thing
-	// down by half with CSS. The browser renders text/images at that larger
-	// size first (more actual pixel detail), then shrinks it - the result
+	// down with CSS. The browser renders text/images at that larger size
+	// first (more actual pixel detail), then shrinks it - the result
 	// looks noticeably crisper than rendering directly at the small size,
 	// the same principle behind why "Retina" images look sharper.
+	// Lives inside .face-front now (not directly in .element) - the actual
+	// photo/name/details only ever belong on the front face; the back face
+	// is deliberately just a plain dimmed color, not a mirrored copy of the
+	// same content, since its whole job is to read as "the inside/back of
+	// the shape", not as more data to read.
 	const supersample = document.createElement( 'div' );
 	supersample.className = 'supersample';
-	element.appendChild( supersample );
+	faceFront.appendChild( supersample );
 
 	const number = document.createElement( 'div' );
 	number.className = 'number';

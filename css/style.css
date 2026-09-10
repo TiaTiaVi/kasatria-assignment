@@ -27,6 +27,55 @@ html, body {
 	isolation: isolate;
 }
 
+/* Fills the same gap #container leaves empty between sign-in succeeding and
+   the Google Sheets fetch actually resolving (see startApp in main.js) -
+   sits above the (currently empty) 3D scene, below the toolbar/nav so
+   those still read as present and working while this shows. */
+#loading-overlay {
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 18px;
+	background: #000;
+	transition: opacity 0.25s ease-out;
+}
+
+/* Deliberately its own class, NOT the generic .hidden utility used
+   elsewhere - that one is `display: none !important`, and !important
+   always wins on that property regardless of selector specificity, so
+   adding it here would make the overlay vanish on the very next paint
+   instead of playing the opacity transition above. Staying visually
+   present at opacity:0 (rather than display:none) is harmless: it's one
+   small, non-interactive flex box, and pointer-events:none keeps it out
+   of the way of clicks on the shape underneath it. */
+#loading-overlay.fade-out {
+	opacity: 0;
+	pointer-events: none;
+}
+
+#loading-spinner {
+	width: 40px;
+	height: 40px;
+	border-radius: 50%;
+	border: 3px solid rgba(127,255,255,0.2);
+	border-top-color: rgba(127,255,255,0.9);
+	animation: loading-spin 0.8s linear infinite;
+}
+
+@keyframes loading-spin {
+	to { transform: rotate(360deg); }
+}
+
+#loading-text {
+	color: rgba(200,255,255,0.75);
+	font-size: 14px;
+	letter-spacing: 0.02em;
+}
+
 #info {
 	position: absolute;
 	top: 14px;
@@ -44,22 +93,6 @@ html, body {
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
-}
-
-/* Small, unobtrusive build marker under the title. Its whole purpose is to
-   make it trivially obvious which copy of the code is actually running -
-   comparing this number is much faster than diffing files, and directly
-   avoids the situation where an old, already-fixed copy gets mistaken for
-   a fresh bug report. Bump the date/number here on every delivered zip. */
-#build-version {
-	position: absolute;
-	top: 34px;
-	left: 16px;
-	font-size: 10px;
-	color: rgba(127,255,255,0.35);
-	z-index: 90;
-	pointer-events: none;
-	text-shadow: 0 0 4px #000;
 }
 
 #sign-out {
@@ -151,8 +184,35 @@ html, body {
 	background: rgba(0,255,255,0.5);
 }
 
+/* Grid Layer mode's "this control doesn't apply right now" state (up/down -
+   see updateGridLayerUI in main.js). Dimmed and inert rather than just
+   silently doing nothing, so it visually reads as "off", not "broken". */
+.nav-btn.is-inactive {
+	opacity: 0.3;
+	pointer-events: none;
+	border-color: rgba(255,255,255,0.25);
+	color: rgba(255,255,255,0.35);
+	background: rgba(0,10,10,0.5);
+}
+
+/* Grid Layer mode's "this control now does something different" state
+   (left/right - previous/next layer instead of rotate). A filled, inverted
+   look - the same visual language #menu button:active already uses for
+   "engaged" - makes the changed function obvious at a glance rather than
+   just a label change someone has to notice. */
+.nav-btn.is-layer-nav {
+	background: rgba(127,255,255,0.9);
+	border-color: rgba(127,255,255,0.9);
+	color: #00201f;
+}
+
+.nav-btn.is-layer-nav:hover {
+	background: rgba(127,255,255,1);
+}
+
 #reset-view-icon,
-#fit-view-icon {
+#fit-view-icon,
+#grid-layer-toggle {
 	/* Was a fixed 40px, which clipped/overflowed "RESET" once its border,
 	   letter-spacing and the browser's own default button padding were all
 	   accounted for. Sizing from the content instead (min-width as a floor,
@@ -176,8 +236,22 @@ html, body {
 }
 
 #reset-view-icon:hover,
-#fit-view-icon:hover {
+#fit-view-icon:hover,
+#grid-layer-toggle:hover {
 	background: rgba(0,255,255,0.25);
+}
+
+/* Layer mode currently ON - a filled, inverted look (the same "engaged"
+   language as .is-layer-nav/#menu button:active) so the toggle's own state
+   is obvious at a glance, not just inferrable from the status line below. */
+#grid-layer-toggle.active {
+	background: rgba(127,255,255,0.9);
+	border-color: rgba(127,255,255,0.9);
+	color: #00201f;
+}
+
+#grid-layer-toggle.active:hover {
+	background: rgba(127,255,255,1);
 }
 
 #zoom-pad {
@@ -240,19 +314,22 @@ html, body {
 	margin-right: 4px;
 }
 
-#legend .swatch.red { background: rgb(255,59,48); }
-#legend .swatch.orange { background: rgb(255,149,0); }
-#legend .swatch.green { background: rgb(76,217,100); }
+/* Matches the deeper tile shades in tileFactory.js's getNetWorthColor -
+   kept in sync so the legend's swatches are exactly what you see on the
+   tiles themselves, not a brighter "ideal" version of the same color. */
+#legend .swatch.red { background: rgb(176,44,38); }
+#legend .swatch.orange { background: rgb(166,88,10); }
+#legend .swatch.green { background: rgb(24,120,58); }
 
 #legend span:not(.swatch) {
 	margin-right: 14px;
 }
 
-/* ---------- Grid layer stepping status (no slider - arrow-key/pad driven) ---------- */
+/* ---------- Grid layer navigation: status line + clickable layer dots ---------- */
 
 #grid-layer-status {
 	position: absolute;
-	bottom: 90px;
+	bottom: 110px;
 	left: 50%;
 	transform: translateX(-50%);
 	background: rgba(0,20,20,0.7);
@@ -262,6 +339,46 @@ html, body {
 	color: rgba(200,255,255,0.95);
 	font-size: 12px;
 	z-index: 6;
+	white-space: nowrap;
+}
+
+/* One small dot per Grid layer - click any of them to jump straight to
+   that layer (see renderGridLayerDots/goToGridLayer in main.js), instead
+   of only being able to step one layer at a time with the arrow keys/pad.
+   Sits just below the status line, both visible for as long as Grid is
+   the active shape. */
+#grid-layer-dots {
+	position: absolute;
+	bottom: 90px;
+	left: 50%;
+	transform: translateX(-50%);
+	display: flex;
+	gap: 6px;
+	padding: 6px 10px;
+	background: rgba(0,20,20,0.7);
+	border: 1px solid rgba(127,255,255,0.4);
+	border-radius: 999px;
+	z-index: 6;
+}
+
+.grid-layer-dot {
+	width: 10px;
+	height: 10px;
+	padding: 0;
+	border-radius: 50%;
+	border: 1px solid rgba(127,255,255,0.6);
+	background: transparent;
+	cursor: pointer;
+	transition: background-color 0.15s ease, transform 0.15s ease;
+}
+
+.grid-layer-dot:hover {
+	background: rgba(127,255,255,0.35);
+}
+
+.grid-layer-dot.active {
+	background: rgba(127,255,255,0.95);
+	transform: scale(1.25);
 }
 
 /* ---------- Insights panel ---------- */
@@ -386,6 +503,24 @@ html, body {
 	padding-left: 18px;
 }
 
+/* Short "what is this site" blurb at the top of the help guide - the other
+   place (besides the login screen) someone would naturally look to find out
+   what they're looking at, without it needing a permanent spot in the main
+   3D view itself. */
+#help-intro {
+	margin: 0 0 16px;
+	padding-bottom: 14px;
+	border-bottom: 1px solid rgba(127,255,255,0.15);
+}
+
+#help-contact {
+	margin-top: 18px;
+	padding-top: 14px;
+	border-top: 1px solid rgba(127,255,255,0.15);
+	font-size: 12px;
+	color: rgba(255,255,255,0.6);
+}
+
 #help-close {
 	position: absolute;
 	top: 10px;
@@ -480,7 +615,7 @@ html, body {
 	font-style: italic;
 }
 
-/* ---------- Person tile (supersampled: built at 2.5x, scaled down 40%) ---------- */
+/* ---------- Person tile (supersampled: built at 3x, scaled down 1/3) ---------- */
 
 /* `will-change: transform` used to sit permanently on EVERY tile here, plus
    every tile's inner wrapper (see .element-inner below) - 400 GPU
@@ -497,35 +632,69 @@ html, body {
    this hint, so removing it costs nothing; `will-change` now only gets
    added to the one tile actually being hovered (see .element:hover
    .element-inner below), which is a legitimate, cheap, single-element use. */
+/* TRUE TWO-SIDED CARD. A full 6-faced extruded box (every side of a real
+   cube - `transform-style: preserve-3d` plus SIX rotated child faces) was
+   tried once before and reverted: 200 tiles x 6 faces = 1200 elements each
+   forced onto their own GPU-composited layer was a real, measurable frame-
+   time cost. What's here now is a much smaller, deliberately different
+   thing: `transform-style: preserve-3d` on THIS element, holding exactly
+   TWO child faces (.face-front / .face-back, below) - 400 composited
+   layers total for 200 tiles, not 1200. The two faces are what let a tile
+   show a genuinely different, DARKER color on its back than its front (see
+   tileFactory.js's dimColor()) - the "strong color outside the shape, dim
+   color inside it" read - driven entirely by the browser's own
+   `backface-visibility: hidden` on each face (whichever one is actually
+   facing the camera paints, automatically, every frame, at no extra JS
+   cost), instead of the old approach of one single face plus a separate,
+   continuously-recomputed JS pass (applyDistanceDepthCue in main.js) that
+   dimmed tiles by raw distance-from-camera - which had a real bug: a tile
+   that's genuinely facing the camera but simply sits a little farther back
+   than average got dimmed right along with tiles actually facing away, so
+   "the front" itself could end up looking dim. Tying strong/dim to actual
+   facing direction instead of distance fixes that directly, and Sphere/
+   Helix no longer run that per-frame JS pass at all now (see
+   maybeUpdateDepthCue in main.js) - one less thing recomputing on every
+   frame, not one more. */
 .element {
 	width: 130px;
 	height: 180px;
-	border-radius: 6px;
-	border: 2px solid rgba(127,255,255,0.25);
 	font-family: Helvetica, sans-serif;
 	text-align: center;
 	line-height: normal;
 	cursor: default;
 	position: relative;
-	background-color: rgba(0,20,20,0.94);
-	backface-visibility: hidden;
 	-webkit-font-smoothing: antialiased;
 	text-rendering: optimizeLegibility;
-	overflow: hidden;
+	/* This is what makes the two child faces below behave as real,
+	   independently-facing 3D planes instead of both being flattened onto
+	   this element's own surface - required for backface-visibility on
+	   each face to mean anything. */
+	transform-style: preserve-3d;
 	/* Isolates each tile's own layout/style work from the other 199 -
 	   with this many transformed elements, the browser would otherwise
 	   have to consider whether any tile's internal changes could affect
 	   its neighbors' layout on every update. It can't (tiles never affect
 	   each other), so telling the browser that directly cuts real,
-	   measurable work during rotation/pan. Deliberately NOT using
-	   `contain: paint` here - that would also clip the hover name-overflow
-	   fix below, undoing it. */
+	   measurable work during rotation/pan. */
 	contain: layout style;
-	/* Smooth fade when a Grid layer is hidden/revealed while stepping, and
-	   for the distance-based depth cue (see applyDistanceDepthCue in
-	   main.js) fading in on Helix/Grid - covers both opacity and the small
-	   blur accent so neither one visibly snaps between updates. */
-	transition: opacity 0.35s ease-in-out, filter 0.3s ease-out;
+	/* Smooth fade when a Grid layer is dimmed as part of its own depth
+	   recede (see applyGridDepthFade in main.js) - Sphere/Helix no longer
+	   need this (their strong/dim read now comes from the two faces below,
+	   not a JS-driven fade), so this only ever actually runs on Grid now.
+	   `.is-hard-hidden` (below) turns this off again for a Grid tile being
+	   hidden outright (layer-stepped past, or too deep to show) - that's a
+	   deliberate navigation snap, not a soft fade, and letting it fade too
+	   is what made changing Grid layers look mushy/blurry instead of crisp. */
+	transition: opacity 0.35s ease-in-out;
+}
+
+/* See the transition comment above - a tile being hard-hidden (Grid layer
+   stepping) skips the fade entirely and just disappears immediately, the
+   same instant its opacity is set to 0 in main.js. Also used the instant a
+   layer becomes visible again while stepping backward, for the same reason
+   in reverse - appearing should be just as crisp as disappearing. */
+.element.is-hard-hidden {
+	transition: none;
 }
 
 /* While a rotate/pan drag is in progress, tiles stop reacting to hover
@@ -534,6 +703,52 @@ html, body {
    do with the drag - this removed a real source of jank while dragging. */
 .is-dragging .element {
 	pointer-events: none;
+}
+
+/* One physical face of the card - .face-front is this tile's real content,
+   facing forward exactly the way the single-faced version always did;
+   .face-back is the exact same size and shape, permanently rotated 180deg
+   around Y, showing only a plain, darkened version of the same net-worth
+   color (see tileFactory.js). `backface-visibility: hidden` on BOTH is the
+   actual mechanism: whichever face's rotated orientation currently points
+   toward the camera is the one the browser paints - the other one simply
+   isn't rendered, at zero extra cost, the same way the back of a real
+   card isn't visible while you're looking at the front. */
+.face {
+	position: absolute;
+	inset: 0;
+	border-radius: 6px;
+	border: 2px solid rgba(127,255,255,0.25);
+	overflow: hidden;
+	backface-visibility: hidden;
+	-webkit-backface-visibility: hidden;
+	/* A cheap, purely 2D "raised card" look - a soft highlight along the
+	   top edge and a soft shadow along the bottom, both INSET so they
+	   layer on top of whatever solid net-worth color tileFactory.js sets
+	   inline (box-shadow is a separate property from background-color, so
+	   the two never fight), plus a drop shadow cast outward so each card
+	   visibly lifts off whatever is behind it. */
+	box-shadow:
+		inset 0 10px 14px -10px rgba(255,255,255,0.35),
+		inset 0 -14px 18px -12px rgba(0,0,0,0.45),
+		0 6px 14px rgba(0,0,0,0.35);
+}
+
+.face-back {
+	transform: rotateY(180deg);
+	/* A faint diagonal hatch, purely so the back reads as "the plain back
+	   of a card" rather than looking like a rendering glitch (a flat block
+	   of color with nothing on it at all can look broken, like a texture
+	   failed to load) - one cheap repeating CSS gradient, no extra DOM,
+	   no JS, negligible paint cost next to the box-shadow every tile
+	   already had. */
+	background-image: repeating-linear-gradient(
+		135deg,
+		rgba(255,255,255,0.07) 0px,
+		rgba(255,255,255,0.07) 2px,
+		transparent 2px,
+		transparent 12px
+	);
 }
 
 /* The supersample wrapper is built well above the tile's real on-screen
@@ -565,31 +780,66 @@ html, body {
 
 /* This scale multiplies directly onto the tile's already-rendered resting
    size (the supersample wrapper's own scale is already "baked in" to that
-   resting size), so 1.8 here really does mean "1.8x bigger than normal" -
+   resting size), so this really does mean "N times bigger than normal" -
    no extra compensation needed. The previous 3.6 here was actually closer
    to 3.6x, well past the intended ~1.8x - a real bug, and part of why
    hovering felt like it blew tiles up further than their (already
-   single-line-truncated) name text could ever fill in cleanly. */
+   single-line-truncated) name text could ever fill in cleanly.
+   Bumped again, 1.8 -> 2.4: with the name/details text often rendering at
+   only a few effective pixels at Table/Grid's normal resting size (200 -
+   or a full un-layered Grid stack's worth of - tiles sharing one screen),
+   1.8x wasn't landing hover's actual job, which is "let someone zoom in on
+   ONE tile enough to comfortably read it." 2.4x is the amount that does
+   that reliably. Table and Grid can both afford it - both space tiles
+   generously (COL/ROW_SPACING, X/Y_SPACING in layouts.js), so an enlarged
+   tile has open room around it and mostly stays inside the window (and
+   the hovered tile's own z-index:100 already lifts it above whatever
+   little overlap does happen with a neighbor). Sphere and Helix get their
+   OWN, smaller amount below - see that rule for why this doesn't work
+   well there. */
 .element:hover .element-inner {
-	transform: scale(1.8);
+	transform: scale(2.4);
 	/* will-change only while actually hovered - one element's worth of extra
 	   compositor layer at a time, instead of the old blanket will-change on
 	   all 200+200 tile/inner elements permanently (a well-documented way to
 	   overload the compositor - see the .element rule above for the fuller
 	   explanation). */
 	will-change: transform;
-	z-index: 10;
-	/* Allow the (now much larger) name to spill past the rounded corners
-	   rather than being hard-clipped - this is the fix for names getting
-	   cut off on hover in Sphere/Helix. The corner-rounding on the photo
-	   itself only matters at rest; while zoomed in, reading the full name
-	   matters more than a perfectly square-cut corner underneath it. */
-	overflow: visible;
+}
+
+/* Sphere and Helix are curved, densely-packed surfaces - unlike Table/Grid's
+   generously-spaced flat layouts, neighboring tiles here sit edge-to-edge
+   and each one is individually rotated (lookAt in layouts.js) to face
+   outward at its own angle, and a large share of the visible tiles at any
+   moment sit near the shape's own silhouette/edge, close to the actual
+   window edge too. 1.8x growth in that situation was routinely enough to
+   push part of the enlarged name/photo either past the browser window's
+   own edge (which the renderer has to clip - there's no room left to grow
+   into) or underneath a neighboring tile that's tilted differently and
+   sits close by - both read as "part of the tile got cut off", which
+   doesn't happen on Table/Grid because those tiles have real open space
+   around them. A smaller zoom keeps the enlarged tile's own footprint
+   inside the room that's actually usually there, on any shape. */
+.layout-sphere .element:hover .element-inner,
+.layout-helix .element:hover .element-inner {
+	transform: scale(1.35);
 }
 
 .element:hover {
-	z-index: 10;
+	/* Well above any non-hovered tile's default stacking (z-index: auto),
+	   so the hovered tile reliably paints on top of every neighbor it might
+	   otherwise overlap - important on Sphere/Helix specifically, where
+	   tiles are packed edge-to-edge and a neighbor sitting slightly closer
+	   to the camera could otherwise paint over part of the hovered one. */
+	z-index: 100;
+}
+
+/* The rounded-corner clipping now lives on .face-front itself (see .face
+   above), not on .element - so the "let the hovered name spill past the
+   corners" fix has to open THAT element's overflow, not .element's. */
+.element:hover .face-front {
 	overflow: visible;
+	z-index: 100;
 }
 
 .element .number {
@@ -612,12 +862,29 @@ html, body {
 }
 
 .element .name {
-	/* Bumped a bit further than the supersample resize alone would call
-	   for (proportional match would be ~32px) - Table specifically packs
-	   all 200 tiles across one flat sheet, making each one noticeably
-	   smaller on screen than in the other three shapes, so the name needs
-	   the extra emphasis there most of all. */
-	font-size: 36px;
+	/* Turns out the name/details text was never actually BLURRY - a
+	   controlled test (rendering the exact same text at the exact same
+	   final on-screen pixel size, but as plain flat 2D HTML with zero 3D
+	   transform involved) showed identically soft edges, proving the CSS3D
+	   scene isn't degrading it. The real problem: at the camera distance
+	   Table's default view needs to fit all 200 tiles on screen at once,
+	   this text was rendering at something like a 5px EFFECTIVE final
+	   size - simply too small for any renderer, on any device, to draw
+	   crisply (that's normal subpixel antialiasing on genuinely tiny
+	   text, not a defect). Bumped further than the previous 36px (which
+	   was itself already a bump past the supersample's own proportional
+	   ~32px) specifically to push that effective floor higher - this
+	   can't fully solve it alone (200 tiles sharing one screen is always
+	   going to make individual text small), but combined with the bigger
+	   hover-zoom below (see .element:hover .element-inner), a tile a
+	   person actually cares about reading is now a real, comfortably
+	   legible size once hovered, not just a bit less tiny.
+	   Bumped again on request, 46 -> 56px - there's real headroom for it:
+	   the supersample box has 280px of vertical space left below the
+	   260px photo (540 total), and even two lines of this plus details
+	   plus margins comes to well under that, so growing it further still
+	   doesn't crowd the photo or get clipped. */
+	font-size: 56px;
 	font-weight: bold;
 	color: #fff;
 	margin-top: 12px;
@@ -637,7 +904,7 @@ html, body {
 }
 
 .element .details {
-	font-size: 27px;
+	font-size: 40px;
 	font-weight: 600;
 	color: rgba(255,255,255,0.85);
 	margin-top: 10px;
@@ -676,6 +943,26 @@ html, body {
 	font-size: 13px;
 	color: #5f6368;
 	margin-bottom: 24px;
+}
+
+/* One-line "what is this site" blurb - deliberately styled a notch smaller/
+   lighter than the "Sign in with Google" line above it, so it reads as
+   supporting context rather than competing with the actual sign-in prompt
+   for attention. Shown once here on login rather than anywhere inside the
+   3D view, so the visualization itself stays uncluttered on every visit. */
+#login-description {
+	font-size: 12px;
+	color: #80868b;
+	line-height: 1.5;
+	margin-top: -12px;
+	margin-bottom: 20px;
+}
+
+#login-access-note a,
+#help-contact a {
+	color: inherit;
+	font-weight: 600;
+	text-decoration: underline;
 }
 
 #g_id_signin_container {

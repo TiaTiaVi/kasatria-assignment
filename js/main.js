@@ -11,12 +11,13 @@ import { CSS3DRenderer } from 'three/addons/renderers/CSS3DRenderer.js';
 const tileTweens = new TWEEN.Group();
 const cameraTweens = new TWEEN.Group();
 
-import { getData } from './dataLoader.js?v=4';
-import { buildTile, formatCurrency, getNetWorthColor } from './tileFactory.js?v=24';
-import { buildTableTargets, buildSphereTargets, buildDoubleHelixTargets, buildGridTargets, GRID_WIDTH, GRID_HEIGHT, computeScaleFactor } from './layouts.js?v=23';
-import { initGoogleSignIn, isSessionExpired, signOut } from './auth.js?v=3';
+import { getData } from './dataLoader.js?v=5';
+import { buildTile, formatCurrency, getNetWorthColor } from './tileFactory.js?v=29';
+import { buildTableTargets, buildSphereTargets, buildHelixTargets, buildGridTargets, GRID_WIDTH, GRID_HEIGHT, computeScaleFactor } from './layouts.js?v=31';
+import { initGoogleSignIn, isSessionExpired, signOut } from './auth.js?v=4';
 
 let camera, scene, renderer, controls;
+let cameraGroupElement; // see the comment where this is captured, in init()
 const objects = [];
 let targets = { table: [], sphere: [], helix: [], grid: [] };
 let peopleData = [];
@@ -24,6 +25,14 @@ let currentProfileIndex = -1;
 let activeLayoutKey = 'table';
 let currentGridLayer = null;   // null = showing the full Grid, 1..totalGridLayers = stepping mode
 let totalGridLayers = 1;       // recalculated from the real data count, never hardcoded
+// Whether Grid's opt-in "step through one layer at a time" mode is active
+// (toggled by the #grid-layer-toggle button - see toggleGridLayerMode).
+// OFF is now Grid's real default: a plain, freely-orbitable 3D shape with
+// every layer visible at once, behaving exactly like Sphere/Helix (see
+// applyGridLayerVisibility/getFramingTargets/handleDirectionalInput below).
+// Turning this ON is what narrows Grid down to viewing exactly one layer at
+// a time, previous/next-navigable.
+let gridLayerModeActive = false;
 let lastRefreshTime = null;
 const zoomRaycaster = new THREE.Raycaster();
 
@@ -34,25 +43,63 @@ const zoomRaycaster = new THREE.Raycaster();
 const BASE_FOV = 40;
 const BASE_ASPECT = 16 / 9;
 
-// Grid gets its own, much narrower field of view - a "telephoto" lens
-// instead of the normal wide-ish one every other shape uses. Grid is the one
-// shape with real depth relative to its own footprint (5x4 wide but 10
-// layers deep) - viewed with an ordinary, wider-FOV perspective camera, the
-// SAME (x, y) grid position at increasing depth still projects to a
-// noticeably different screen position as it recedes (basic perspective:
-// nearer things spread out more, farther things converge toward the middle
-// of frame) - with ten layers doing that at once, every column fans out into
-// a radiating starburst instead of reading as ten sheets stacked directly
-// behind one another. A narrow FOV, paired with a correspondingly much
-// greater camera distance to keep the shape the same apparent size, is the
-// standard fix for exactly this (the same "long lens flattens depth" effect
-// a photographer relies on) - the narrower the angle a scene is viewed
-// through, the closer it gets to a true orthographic projection, where the
-// same (x, y) position looks identical on screen no matter how far back it
-// sits. This is what actually makes each Grid layer read as one flat, solid
-// sheet, tightly stacked behind the one in front - not just a background
-// color change.
-const GRID_FOV = 10;
+// Grid briefly rendered through a true THREE.OrthographicCamera (zero
+// perspective convergence at all) to fix an earlier "tiles overlapping,
+// hard to read" complaint - it did fix that, but it also made Grid look
+// completely flat, like a printed sheet rather than an actual 3D
+// arrangement of ten stacked layers (the exact "why doesn't Grid look 3D
+// like [the three.js periodic table example]" follow-up this caused).
+// Grid is back to the same real PerspectiveCamera every other shape uses -
+// nearer layers now genuinely appear bigger and farther ones smaller, and
+// orbiting around it (left-drag) shows real parallax between layers, which
+// is what actually reads as "3D" rather than a picture of a shape. This FOV
+// is still narrower than Table/Sphere's normal 40 degrees, though, as a
+// middle ground: at Grid's proportions (5x4 wide but multiple layers deep)
+// a normal wide FOV makes every column visibly fan sideways the farther
+// back it sits (ordinary perspective convergence) - readable depth without
+// that fan comes from a combination of this narrower angle, the shorter
+// total depth per layer (see Z_SPACING in layouts.js), the per-layer
+// stagger (see TOTAL_FAN_SPAN/buildGridTargets in layouts.js), and the
+// per-tile opacity depth recede (see applyGridDepthFade below) that fades
+// farther layers toward the background instead of letting them compete
+// visually with the front one.
+const GRID_FOV = 12;
+
+// Helix needs the same narrower-than-normal FOV treatment as Grid above,
+// for the same underlying reason (ordinary perspective exaggerating a
+// shape's own depth), even though Helix's default view is now straight-on
+// rather than tilted (see getDefaultPhi below): the coil is still a real
+// cylinder, so its near side (closest to the camera) is genuinely closer
+// than its far side even head-on, and a normal, wider FOV makes that near
+// side visibly bulge/bow outward compared to the edges curving away - a
+// narrower FOV at a proportionally greater distance keeps that curve
+// reading as a gentle, even wall of cards rather than a fisheye bulge. It
+// also still matters if you drag-tilt the view yourself: at a normal FOV,
+// tilting down at the coil makes its near edge project noticeably wider on
+// screen than its far edge even though the radius never changes (the
+// "bucket/lampshade" look) - the narrower FOV avoids that too.
+const HELIX_FOV = 15;
+
+// Grid redone (again) as a real, whole 3D shape by default - see
+// gridLayerModeActive above. There is no longer any "how many layers are
+// visible right now" tuning constant here at all: with the layer-stepping
+// cap gone, Grid's default view is simply every tile at once, exactly the
+// way Sphere/Helix already work, and only the opt-in Layer mode narrows
+// that down (to exactly one layer - see applyGridLayerVisibility). The
+// per-layer stagger (TOTAL_FAN_SPAN in layouts.js) and the opacity
+// depth-fade below (DEPTH_OPACITY_FLOOR) are what keep a full, many-layer
+// stack reading as a legible fanned deck instead of clutter.
+
+// How long Grid's camera reframe takes when stepping to a different layer
+// (see reframeGridView/flyCameraTo below) - deliberately shorter than the
+// default 800ms camera-fly duration used for Reset/Fit/switching shapes.
+// Stepping through layers is a quick, repeated, deliberate "next card"
+// action (arrow keys, scroll wheel, the nav-pad) - a snappier reframe
+// keeps pace with that, and finishing sooner also means less time spent
+// with the outgoing and incoming layers' opacity fades and the camera pan
+// all overlapping on screen at once, which is a real part of what made
+// changing layers look busy/blurry rather than crisp.
+const GRID_STEP_FLY_DURATION = 450;
 
 // How far the camera is allowed to tilt up/down (the polar angle from
 // straight overhead), kept inside the 0-to-PI range with a small safety
@@ -79,6 +126,31 @@ const GRID_FOV = 10;
 const MIN_PHI = 0.7;
 const MAX_PHI = Math.PI - 0.7;
 
+// Helix's own left-click-drag still ignores phi entirely (see the
+// "activeLayoutKey !== 'helix'" check in setupManualRotate's pointermove
+// handler) - a narrow-but-nonzero clamp was tried there first, and dragging
+// the Helix still read as "rotating crazily" even with only a small
+// remaining tilt range, because that tilt combined with theta spinning
+// freely at the same time from one diagonal drag. Locking phi outright for
+// THAT one gesture is what actually makes a drag read as "turn the coil in
+// place", full stop.
+//
+// The arrow-key/nav-pad up/down step is a different, single-axis-at-a-time
+// gesture (no diagonal combination possible), so it doesn't have that
+// problem - Helix's pad uses this same clamp range as every other shape
+// (see handleDirectionalInput's helix branch), tilting the viewing angle up
+// and down same as Sphere/Grid, purely by orbiting the camera around the
+// coil's own fixed center.
+//
+// Single shared place both the drag-rotate handler and the arrow-key/pad
+// step use to decide how far up/down every shape is allowed to tilt - so
+// the two can never disagree with each other.
+function getPhiClampRange( layoutKey ) {
+
+	return { min: MIN_PHI, max: MAX_PHI };
+
+}
+
 // The person must sign in with Google before the visualization appears -
 // this is the actual login gate required by the assignment (Image A).
 // startApp() only runs once Google confirms who they are.
@@ -94,6 +166,16 @@ async function startApp( googleProfile ) {
 	document.getElementById( 'login-screen' ).classList.add( 'hidden' );
 	document.getElementById( 'app' ).classList.remove( 'hidden' );
 
+	// Sign-in succeeding doesn't mean there's anything to look at yet - the
+	// Google Sheets fetch this kicks off next is a real network round trip
+	// (typically a second or two, longer on a slow connection), and until
+	// it resolves the only thing on screen was the empty toolbar/nav over a
+	// plain black container - which reads as "did this break?" rather than
+	// "still working on it". This overlay (hidden again in the finally
+	// block below, once there's an actual shape to show or a real error
+	// message replacing it) is what fills that gap honestly.
+	document.getElementById( 'loading-overlay' ).classList.remove( 'fade-out' );
+
 	let people;
 
 	try {
@@ -104,6 +186,12 @@ async function startApp( googleProfile ) {
 	} catch ( err ) {
 
 		console.error( 'Failed to load data from Google Sheets:', err );
+
+		// The error message below replaces #container's own content directly,
+		// so the loading spinner needs to come down first - otherwise it'd
+		// sit stuck on screen, spinning forever, on top of a "Try Again"
+		// button that already works fine underneath it.
+		document.getElementById( 'loading-overlay' ).classList.add( 'fade-out' );
 
 		// A 403 is a real, permanent permissions problem (the Sheet's
 		// sharing or the API key itself) - worth telling the person to go
@@ -139,16 +227,19 @@ async function startApp( googleProfile ) {
 	init( people );
 	animate();
 
+	document.getElementById( 'loading-overlay' ).classList.add( 'fade-out' );
+
 }
 
 function init( people ) {
 
-	// Far plane raised well past the old 10000: Grid's narrow "telephoto" FOV
-	// (see GRID_FOV above) needs the camera to sit much farther back to keep
-	// the shape the same apparent size - easily beyond the old far plane,
-	// which would have silently clipped the whole shape out of view.
+	// Far plane raised well past the old 10000: Grid's narrower FOV (see
+	// GRID_FOV above) needs the camera to sit much farther back to keep the
+	// shape the same apparent size - easily beyond the old far plane, which
+	// would have silently clipped the whole shape out of view.
 	camera = new THREE.PerspectiveCamera( BASE_FOV, window.innerWidth / window.innerHeight, 1, 100000 );
 	camera.position.z = 3400;
+
 	fitCameraToWindow();
 
 	scene = new THREE.Scene();
@@ -175,6 +266,37 @@ function init( people ) {
 	renderer = new CSS3DRenderer();
 	renderer.setSize( window.innerWidth, window.innerHeight );
 	document.getElementById( 'container' ).appendChild( renderer.domElement );
+
+	// CSS3DRenderer privately builds two wrapper divs around every tile it
+	// manages - renderer.domElement (just appended above), and one level
+	// inside that, a second div it writes the live camera transform onto
+	// every single frame (see three.js's own CSS3DRenderer.js - this inner
+	// element isn't exposed as a public property, so this reaches in by
+	// fixed DOM position, which is safe here only because that nesting is
+	// built once in the renderer's constructor and never rebuilt for its
+	// whole lifetime). Every one of the 200 tiles sits directly inside THIS
+	// element, not inside renderer.domElement itself.
+	//
+	// This is the actual, real fix for "sharp while rotating, soft again
+	// the moment it's still": Chrome (and other browsers) rasterize a 3D-
+	// transformed layer at full quality once it's confident the layer is
+	// actively being composited on the GPU, and can fall back to a lower-
+	// fidelity path for a layer it doesn't consider worth keeping promoted.
+	// The earlier attempt at this fix (a per-frame settle-detector forcing
+	// a sub-pixel nudge-and-revert through the camera) tried to trigger
+	// that promotion indirectly and didn't hold up under real use. This is
+	// the direct version: hint the browser to keep exactly ONE element -
+	// this shared group all 200 tiles live inside - GPU-composited. That's
+	// deliberately NOT the same thing the comment above .element in
+	// style.css describes trying and reverting: that was `will-change:
+	// transform` on all 400 individual tile/face elements (400 separate
+	// compositor layers, held open for the whole session, which is the
+	// specific overload MDN's own guidance warns against). One layer for
+	// the whole group, instead of 400 for its individual members, is a
+	// completely different order of cost - this is the standard, textbook
+	// way to use will-change on a group of many moving children.
+	cameraGroupElement = renderer.domElement.firstElementChild && renderer.domElement.firstElementChild.firstElementChild;
+	if ( cameraGroupElement ) cameraGroupElement.style.willChange = 'transform';
 
 	controls = new TrackballControls( camera, renderer.domElement );
 	controls.noZoom = true;    // we handle zoom ourselves (see onWheelZoom) - one
@@ -249,6 +371,7 @@ function init( people ) {
 
 	document.getElementById( 'reset-view-icon' ).addEventListener( 'click', resetCamera );
 	document.getElementById( 'fit-view-icon' ).addEventListener( 'click', fitToPanel );
+	document.getElementById( 'grid-layer-toggle' ).addEventListener( 'click', toggleGridLayerMode );
 	document.getElementById( 'refresh-data' ).addEventListener( 'click', refreshData );
 	document.getElementById( 'sign-out' ).addEventListener( 'click', signOut );
 
@@ -295,6 +418,12 @@ function init( people ) {
 
 	window.addEventListener( 'keydown', onKeyDown );
 
+	// Matches the `layout-<name>` class switchLayout() applies on every
+	// later switch (see there for why - it's what scopes Sphere/Helix's
+	// smaller hover-zoom in style.css) - Table is the default first view,
+	// and it never goes through switchLayout() to get here.
+	document.getElementById( 'container' ).classList.add( 'layout-table' );
+
 	transform( targets.table, 2000 );
 	resetCamera();
 
@@ -310,11 +439,12 @@ function rebuildTargets( count ) {
 	targets = {
 		table: buildTableTargets( count ),
 		sphere: buildSphereTargets( count ),
-		helix: buildDoubleHelixTargets( count ),
+		helix: buildHelixTargets( count ),
 		grid: buildGridTargets( count )
 	};
 
 	totalGridLayers = Math.ceil( count / ( GRID_WIDTH * GRID_HEIGHT ) );
+	renderGridLayerDots();
 
 	// If we were mid-way through stepping Grid layers and the data shrank so
 	// that layer no longer exists, fall back to showing the whole Grid
@@ -322,6 +452,7 @@ function rebuildTargets( count ) {
 	if ( currentGridLayer !== null && currentGridLayer > totalGridLayers ) {
 
 		currentGridLayer = null;
+		gridLayerModeActive = false;
 
 	}
 
@@ -344,6 +475,17 @@ function switchLayout( layoutKey ) {
 
 	activeLayoutKey = layoutKey;
 
+	// A `layout-<name>` class on the container so CSS can tell which shape
+	// is active (see the Sphere/Helix hover-zoom override in style.css -
+	// those two curved, densely-packed shapes need a smaller hover-zoom
+	// amount than Table/Grid's generously-spaced flat layouts, or the
+	// enlarged tile routinely pushes part of itself past the window edge
+	// or under a neighboring tile). One class replaced each switch, so
+	// there's never more than one active at a time.
+	const container = document.getElementById( 'container' );
+	container.classList.remove( 'layout-table', 'layout-sphere', 'layout-helix', 'layout-grid' );
+	container.classList.add( `layout-${ layoutKey }` );
+
 	// Grid's camera uses its own, much narrower field of view (see GRID_FOV) -
 	// re-applying it here, right when the active shape actually changes, is
 	// what makes that "telephoto" effect real on the camera itself, not just
@@ -359,9 +501,13 @@ function switchLayout( layoutKey ) {
 
 	if ( layoutKey === 'grid' ) {
 
-		currentGridLayer = null; // always start a fresh Grid view at "show everything"
+		// Always start a fresh Grid view in its real default: the whole 3D
+		// shape, every layer at once, Layer mode off - never mid-step from
+		// whatever was left over from a previous visit.
+		currentGridLayer = null;
+		gridLayerModeActive = false;
 		applyGridLayerVisibility();
-		updateGridLayerStatusText();
+		updateGridLayerUI();
 
 	} else {
 
@@ -370,33 +516,36 @@ function switchLayout( layoutKey ) {
 		// stayed invisible forever afterward, even on completely different
 		// shapes - that's what caused tiles to "go missing" on Table/Sphere/Helix.
 		currentGridLayer = null;
+		gridLayerModeActive = false;
 
-		if ( layoutKey === 'helix' ) {
+		// Table, Sphere, and Helix all reset to fully solid/sharp/clickable
+		// here now. Sphere and Helix used to need their own special-case
+		// branch that ran a continuous JS "depth cue" (dimming tiles by raw
+		// distance from the camera) to fake a near/far distinction - that's
+		// gone now (see maybeUpdateDepthCue and tileFactory.js's buildTile):
+		// every tile is a genuine two-sided card, and the browser's own
+		// `backface-visibility: hidden` (see .face in style.css) shows the
+		// strong-colored front or the dimmed back automatically, purely from
+		// each tile's real 3D orientation - no per-frame recompute needed,
+		// and no risk of a tile that's genuinely facing the camera getting
+		// dimmed just for sitting a little farther back than average (the
+		// old cue's actual bug). So the reset here is simple and uniform:
+		// clear whatever opacity/hard-hidden state Grid's own layer-stepping
+		// may have left behind, and make sure every tile can be clicked again.
+		objects.forEach( ( obj ) => {
 
-			// Helix manages its own opacity/blur continuously via the
-			// distance depth cue (see maybeUpdateDepthCue) - just make sure
-			// nothing is left invisible from a previous Grid stepping session.
-			objects.forEach( ( obj ) => { obj.element.style.pointerEvents = 'auto'; } );
-			applyDistanceDepthCue( objects );
+			obj.element.style.opacity = '1';
+			obj.element.style.pointerEvents = 'auto';
+			obj.element.style.filter = 'none';
+			obj.element.classList.remove( 'is-hard-hidden' );
 
-		} else {
+		} );
 
-			// Table/Sphere don't use any depth cue at all - reset every
-			// tile back to fully solid and sharp. Without this explicit
-			// reset, a tile could be left permanently dimmed/blurred here
-			// from whatever Grid or Helix's depth cue last set it to,
-			// since nothing on these two shapes would ever clear it again.
-			objects.forEach( ( obj ) => {
-
-				obj.element.style.opacity = '1';
-				obj.element.style.filter = '';
-				obj.element.style.pointerEvents = 'auto';
-
-			} );
-
-		}
-
-		hideGridLayerStatus();
+		// updateGridLayerUI checks activeLayoutKey itself (already pointed at
+		// the new, non-Grid shape at this point) and hides the toggle
+		// button/status/dots and clears the up-down/left-right icon styling
+		// on its own - one function, whether entering or leaving Grid.
+		updateGridLayerUI();
 
 	}
 
@@ -446,7 +595,30 @@ function setupManualRotate() {
 		const spherical = new THREE.Spherical().setFromVector3( offset );
 
 		spherical.theta -= dx * ROTATE_SPEED;
-		spherical.phi = THREE.MathUtils.clamp( spherical.phi - dy * ROTATE_SPEED, MIN_PHI, MAX_PHI );
+
+		// Helix deliberately ignores vertical drag entirely (no phi change
+		// at all), instead of clamping it to a narrow range the way it used
+		// to. Reported behavior: even a small remaining tilt range,
+		// combined with theta spinning freely, still read as "rotating
+		// crazily" rather than a controlled turn - a diagonal drag tilted
+		// AND spun the coil at once, and the double-helix's whole reason
+		// for turning is horizontal in the first place (spin around the
+		// axis to swap which strand faces you - see buildHelixTargets in
+		// layouts.js). Locking phi outright makes a Helix drag behave
+		// exactly like "turn a barrel in place": purely a spin, always
+		// framed the same way, that only ever changes WHICH data is
+		// currently facing you, never how the coil itself looks tilted on
+		// screen. Vertical mouse movement is simply inert here - tilting the
+		// viewing angle up/down is still available via the up/down arrow
+		// keys or nav-pad (a single-axis step, not a drag - see the phi
+		// comment above getPhiClampRange), just not tied to this drag
+		// gesture.
+		if ( activeLayoutKey !== 'helix' ) {
+
+			const phiRange = getPhiClampRange( activeLayoutKey );
+			spherical.phi = THREE.MathUtils.clamp( spherical.phi - dy * ROTATE_SPEED, phiRange.min, phiRange.max );
+
+		}
 
 		offset.setFromSpherical( spherical );
 		camera.position.copy( controls.target ).add( offset );
@@ -561,21 +733,45 @@ function handleDirectionalInput( direction ) {
 
 	} else if ( activeLayoutKey === 'helix' ) {
 
-		// Left/right reveal the other strand/side (rotate around the axis).
-		// Up/down climb the coil's height, since that's where "the next
-		// data" actually lives for a helix - not around its circumference.
+		// All four directions orbit the camera around the coil's own fixed
+		// center - left/right spin around the vertical axis to bring the far
+		// strand into view, up/down tilt the viewing angle up/down, the same
+		// way Sphere and Grid's pad already work. Nothing here ever moves
+		// controls.target, so the coil itself never drifts on screen - only
+		// the angle it's viewed from changes. (This used to call climbHelix(),
+		// which panned the target itself up/down - a real, if small, drift
+		// each press. Panning is now exclusively a right-click-drag gesture -
+		// see setupManualPan - so rotating never moves the shape.)
 		if ( direction === 'left' ) rotateCameraStep( 'theta', - 1 );
 		else if ( direction === 'right' ) rotateCameraStep( 'theta', 1 );
-		else if ( direction === 'up' ) climbHelix( 1 );
-		else if ( direction === 'down' ) climbHelix( - 1 );
+		else if ( direction === 'up' ) rotateCameraStep( 'phi', - 1 );
+		else if ( direction === 'down' ) rotateCameraStep( 'phi', 1 );
 
 	} else if ( activeLayoutKey === 'grid' ) {
 
-		// All four arrows step through depth layers - Up/Right go forward,
-		// Down/Left go backward.
-		// Left/Up = previous layer, Right/Down = next layer.
-		if ( direction === 'right' || direction === 'down' ) stepGridLayer( 1 );
-		else stepGridLayer( - 1 );
+		if ( gridLayerModeActive ) {
+
+			// Layer mode: only left/right mean anything now (previous/next
+			// layer - see the "is-layer-nav" highlight on those two icons
+			// in updateGridLayerUI). Up/down are intentionally inert here
+			// (see the "is-inactive" dimming on those two icons instead) -
+			// there's nothing for them to do while only a single layer is
+			// on screen at a time.
+			if ( direction === 'left' ) stepGridLayer( - 1 );
+			else if ( direction === 'right' ) stepGridLayer( 1 );
+
+		} else {
+
+			// Default Grid behaves exactly like Sphere now: a plain,
+			// freely-orbitable 3D shape, every layer visible at once - so
+			// the pad/keyboard just orbits the camera around it the same
+			// way Sphere's does.
+			if ( direction === 'left' ) rotateCameraStep( 'theta', - 1 );
+			else if ( direction === 'right' ) rotateCameraStep( 'theta', 1 );
+			else if ( direction === 'up' ) rotateCameraStep( 'phi', - 1 );
+			else if ( direction === 'down' ) rotateCameraStep( 'phi', 1 );
+
+		}
 
 	}
 
@@ -610,27 +806,18 @@ function panCameraStep( direction ) {
 
 }
 
-// Moves the camera up/down along the helix's height - "climbing the coil"
-// to reveal sections higher or lower than what's currently in view.
-function climbHelix( sign ) {
 
-	const CLIMB_STEP = 80;
-	camera.position.y += sign * CLIMB_STEP;
-	controls.target.y += sign * CLIMB_STEP;
-	controls.update();
-	render();
-
-}
-
-// Steps the Grid view forward (+1) or backward (-1) through its depth
-// layers. Layers already passed get hidden ("thrown away" like a turned
-// page); the current layer and everything still ahead stays fully visible -
-// the "sliding book" effect.
+// Steps Layer mode forward (+1) or backward (-1) by exactly one layer.
+// Only meaningful once Layer mode is active (see toggleGridLayerMode) -
+// calling this also turns Layer mode on if it somehow wasn't already,
+// since "step to a specific layer" only makes sense while only one layer
+// is meant to be on screen at a time.
 function stepGridLayer( delta ) {
 
+	const wasOverview = currentGridLayer === null;
 	let newLayer;
 
-	if ( currentGridLayer === null ) {
+	if ( wasOverview ) {
 
 		newLayer = delta > 0 ? 1 : totalGridLayers;
 
@@ -641,65 +828,171 @@ function stepGridLayer( delta ) {
 	}
 
 	newLayer = THREE.MathUtils.clamp( newLayer, 1, totalGridLayers );
-	currentGridLayer = newLayer;
+	goToGridLayer( newLayer, wasOverview );
+
+}
+
+// Jumps straight to a specific Grid layer, from anywhere - the overview, a
+// different layer entirely, doesn't matter. Both stepGridLayer (arrow keys/
+// pad, always a distance of exactly one layer) and clicking a layer dot
+// (see renderGridLayerDots - can be any distance at all) funnel through
+// here, so there's exactly one place that actually changes which layer is
+// current - and the one place that turns Layer mode on, since "go to a
+// specific layer" always implies it.
+function goToGridLayer( layerNumber, isEnteringStepMode = false ) {
+
+	const previousLayer = currentGridLayer;
+	currentGridLayer = THREE.MathUtils.clamp( layerNumber, 1, totalGridLayers );
+	gridLayerModeActive = true;
+
+	const enteringStepMode = isEnteringStepMode || previousLayer === null;
+	const jumpDistance = previousLayer === null ? Infinity : Math.abs( currentGridLayer - previousLayer );
 
 	applyGridLayerVisibility();
-	updateGridLayerStatusText();
-	reframeGridView();
+	updateGridLayerUI();
+	// A jump of more than one layer (entering stepping mode from the
+	// overview, or clicking a dot several layers away) is a bigger visual
+	// change than a single "next card" step, so it gets the calmer, longer
+	// camera fly (see reframeGridView) instead of the snappy per-step one -
+	// a multi-layer jump arriving in 450ms read as an abrupt cut rather
+	// than a deliberate move.
+	reframeGridView( enteringStepMode || jumpDistance > 1 );
+
+}
+
+// Turns Grid's opt-in "step through one layer at a time" mode on or off -
+// wired to the #grid-layer-toggle button (see updateGridLayerUI for its
+// styling, and index.html for its markup - it only ever appears while Grid
+// is the active shape). OFF (Grid's real default) is every layer visible
+// at once, freely orbitable, exactly like Sphere. ON narrows that down to
+// exactly one layer on screen, previous/next-navigable - see
+// applyGridLayerVisibility.
+function toggleGridLayerMode() {
+
+	gridLayerModeActive = ! gridLayerModeActive;
+
+	if ( gridLayerModeActive ) {
+
+		goToGridLayer( currentGridLayer || 1, true );
+
+	} else {
+
+		currentGridLayer = null;
+		applyGridLayerVisibility();
+		updateGridLayerUI();
+		reframeGridView( true );
+
+	}
 
 }
 
 function applyGridLayerVisibility() {
 
-	// Every layer that isn't "turned past" yet shows at FULL opacity - a
-	// genuinely solid sheet, not a partial one. This used to fade each
-	// still-ahead layer by distance (nearest layer fully opaque, farthest
-	// down to 35%), which was a reasonable depth cue in principle, but at
-	// this shape's proportions (a footprint much narrower than its full
-	// 10-layer depth) it had a real side effect: a partially-transparent
-	// layer lets whatever is directly behind it - the next layer's tiles,
-	// offset only slightly by perspective - visibly bleed through, and with
-	// ten layers all doing that at once the result reads as a smeared,
-	// radiating "starburst" instead of a clean stack of cards. Tiles already
-	// carry a solid (94%-opaque) background of their own now (see
-	// tileFactory.js) specifically so the FRONT layer's cards fully hide
-	// whatever sits behind them on their own, the way a real printed card
-	// would - no extra fading needed, and no extra bleed-through caused.
-	// Only the page-turn effect (below) still uses opacity, because that one
-	// is meant to be a hard hide, not a soft depth cue.
+	// Grid is back to a genuine binary now, not a tunable "how many layers
+	// deep" cap: either every tile is visible (Layer mode off - the real
+	// default, see gridLayerModeActive), or exactly ONE layer is (Layer
+	// mode on - currentGridLayer says which). `is-hard-hidden` (see
+	// style.css) turns off the usual opacity transition specifically for
+	// tiles hidden by Layer mode, so switching layers is a real instant
+	// snap, not a 0.35s fade - a big part of what made changing Grid layers
+	// look mushy/blurry rather than crisp back when this was tried with a
+	// soft fade instead. Whatever IS visible still gets a light,
+	// opacity-only recede by distance (see applyGridDepthFade below) - just
+	// enough to read as "farther back" across however many layers are
+	// showing, without touching color/brightness, since a Grid tile's own
+	// color is exactly what net worth reads through (dimming it further
+	// from here would visually compete with a tile's own coloring - see
+	// tileFactory.js). That part DOES fade smoothly (the normal
+	// transition, not is-hard-hidden) - it's a soft depth cue, not a
+	// navigation snap.
+	const visible = [];
+
 	objects.forEach( ( obj ) => {
 
 		const tileLayer = obj.element._gridLayer;
-		const isTurnedPast = ( currentGridLayer !== null && tileLayer < currentGridLayer );
+		const isHiddenByLayerMode = currentGridLayer !== null && tileLayer !== currentGridLayer;
 
-		if ( isTurnedPast ) {
+		if ( isHiddenByLayerMode ) {
 
-			// Already "turned past" while stepping - fully hidden, the
-			// page-turn effect.
+			obj.element.classList.add( 'is-hard-hidden' );
 			obj.element.style.opacity = '0';
 			obj.element.style.pointerEvents = 'none';
 
 		} else {
 
-			obj.element.style.opacity = '1';
+			obj.element.classList.remove( 'is-hard-hidden' );
 			obj.element.style.pointerEvents = 'auto';
+			visible.push( obj );
 
 		}
 
 	} );
 
+	applyGridDepthFade( visible );
+
 }
 
-// Distance-from-camera "depth of field" for Helix: tiles closer to the
-// camera stay crisp and fully opaque, farther ones fade. Opacity alone
-// carries the whole effect - no blur. Blur was pulled entirely: it's a
-// meaningfully heavier operation for a browser's GPU compositor than
-// opacity (which is compositor-only and effectively free to update often),
-// and a clean, uniformly "solid" tile is also just what was actually
-// asked for over a soft haze.
-const DEPTH_OPACITY_FLOOR = 0.35;
+// Grid-only, opacity-only "depth of field": the nearest visible layer stays
+// fully opaque, and each layer behind it fades a bit more, purely in
+// opacity - never brightness or saturation, since a Grid tile's color is
+// exactly the net-worth color it's meant to be read at, at every depth
+// (unlike Sphere/Helix, no tile here is ever facing away from the camera -
+// Grid never rotates its tiles - so there's no "back face" concept in play,
+// just plain layers receding). Combined with the small per-layer stagger in
+// layouts.js (buildGridTargets), this is what keeps Grid's real default -
+// EVERY layer visible at once, a genuine full-depth 3D stack, not just a
+// couple of front layers - reading as a legible fanned deck rather than
+// clutter.
+//
+// Sphere and Helix no longer call this at all - their strong/dim read now
+// comes from each tile's real two-sided geometry (see tileFactory.js /
+// the .face rules in style.css), decided by the browser every frame for
+// free, not recomputed here.
+// Lowered again (0.55 -> 0.35 -> 0.22): Grid's default view can now show a
+// real dataset's full 8-10 layers at once (not capped at a handful like
+// before), so the back of that stack needs to fade further toward the
+// background to stay readable as "the same shape's own depth" rather than
+// competing with the front layer for attention.
+const DEPTH_OPACITY_FLOOR = 0.22;
+const DEPTH_EASING_POWER = 1.6;
 
-function applyDistanceDepthCue( objectList ) {
+// Opacity alone turned out not to be enough on its own: a tile fading to,
+// say, 70% still has every one of its edges and its full name/details text
+// rendered exactly as crisply as the front layer, just a bit lighter - and
+// with up to 8-10 full layers of that all visible through the gaps between
+// the front layer's own tiles at once, the result reads as a tangle of
+// overlapping sharp text fragments, not "background." That's what was
+// actually behind Grid's default view looking "blurry"/messy at a glance -
+// not literal blur, but a genuine legibility problem from too much sharp,
+// readable-looking detail competing for attention at once. Adding a real
+// optical blur here - same 0-at-front eased depth term the opacity fade
+// already computes, just fed into `filter: blur()` too - fixes that at the
+// source: the front layer (t=0) stays perfectly crisp, and everything
+// behind it now genuinely reads as a soft, receding background instead of
+// a wall of half-legible overlapping names, the same way a real camera's
+// depth of field does it.
+const DEPTH_BLUR_MAX_PX = 3.5;
+
+// How much real depth (in scene units) has to actually be present before
+// the recede kicks in at full strength. Normalizing purely by the visible
+// set's OWN min/max distance (see `range` below) works well for a shape
+// with genuine depth (Sphere, Helix, Grid's default multi-layer view), but
+// breaks down the moment the visible set is essentially flat - Grid's very
+// last layer while stepping, for instance, is a single plane of tiles that
+// are all almost exactly the same distance from the camera, so the only
+// "range" left is a few tens of units of positional noise (corner tiles
+// sitting a little farther from the camera than center ones, geometry that
+// has nothing to do with depth). Stretching THAT tiny noise across the
+// full 0-1 dim range made an entire single, perfectly readable layer look
+// arbitrarily half-dimmed. Comparing the real range against this reference
+// (comfortably smaller than one Grid layer-to-layer step, comfortably
+// bigger than that per-tile positional noise) and scaling the whole effect
+// down when there's nothing meaningful to show is what keeps a genuinely
+// flat view (or near-flat, like Grid's last remaining layer) fully bright
+// instead of arbitrarily dimmed.
+const DEPTH_MEANINGFUL_RANGE = 180;
+
+function applyGridDepthFade( objectList ) {
 
 	if ( objectList.length === 0 ) return;
 
@@ -718,13 +1011,17 @@ function applyDistanceDepthCue( objectList ) {
 	// looking right at any zoom level, instead of needing to be re-tuned
 	// per shape or per camera distance.
 	const range = Math.max( 1, maxDist - minDist );
+	const cueStrength = Math.min( 1, range / DEPTH_MEANINGFUL_RANGE );
 
 	objectList.forEach( ( obj, i ) => {
 
-		const t = ( distances[ i ] - minDist ) / range; // 0 = nearest, 1 = farthest
+		const linearT = ( distances[ i ] - minDist ) / range; // 0 = nearest, 1 = farthest
+		const t = Math.pow( linearT, DEPTH_EASING_POWER ) * cueStrength; // eased - see comment above
+
 		const opacity = 1 - t * ( 1 - DEPTH_OPACITY_FLOOR );
 
 		obj.element.style.opacity = opacity.toFixed( 2 );
+		obj.element.style.filter = t > 0.01 ? `blur(${ ( t * DEPTH_BLUR_MAX_PX ).toFixed( 2 ) }px)` : 'none';
 
 	} );
 
@@ -741,27 +1038,26 @@ const DEPTH_CUE_CAMERA_MOVE_EPSILON = 0.5;
 
 function maybeUpdateDepthCue( timestamp ) {
 
-	// Grid no longer needs any per-frame work here at all: its layer
-	// visibility is now a plain "turned past = hidden, everything else =
-	// fully solid" state (see applyGridLayerVisibility) that only ever
-	// changes when you actually step to a different layer or switch shapes -
-	// never as a function of camera distance/angle. Continuously
-	// recomputing and rewriting the same opacity on 200 elements every ~90ms
-	// while just sitting there looking at Grid was pure wasted work (and,
-	// with real photo-heavy tiles, exactly the kind of steady background
-	// cost that makes the whole page feel less responsive than it should).
-	// Helix is the one shape that still genuinely needs this: its
-	// depth-of-field fade is deliberately continuous, since the camera can
-	// orbit freely around it at any moment.
-	if ( activeLayoutKey !== 'helix' ) return;
+	// Grid is the ONLY shape that still needs a per-frame recompute here.
+	// Table has no real front/back at all (every tile sits at roughly the
+	// same depth), and Sphere/Helix no longer need one either - their
+	// strong/dim read now comes from each tile's real two-sided geometry
+	// (see tileFactory.js / the .face rules in style.css), which the
+	// browser resolves itself every frame from each tile's actual 3D
+	// orientation, at zero JS cost. Grid still needs this because it also
+	// has to respect layer-stepping (hide whatever's been "turned past" or
+	// is too deep to show - see applyGridLayerVisibility) on top of its own
+	// opacity-only depth fade, and the camera can orbit freely around it at
+	// any moment.
+	if ( activeLayoutKey !== 'grid' ) return;
 	if ( timestamp - lastDepthCueUpdate < DEPTH_CUE_THROTTLE_MS ) return;
 
 	// Skip the recompute entirely while the camera hasn't actually moved -
 	// by far the most common state (sitting there looking, not actively
 	// dragging). Without this check, re-running the exact same distance
-	// math and writing the exact same opacity/blur strings every ~90ms
-	// still restarts each tile's CSS transition over and over, purely from
-	// the values being reassigned rather than genuinely changing - real,
+	// math and writing the exact same opacity strings every ~90ms still
+	// restarts each tile's CSS transition over and over, purely from the
+	// values being reassigned rather than genuinely changing - real,
 	// measurable idle overhead (traced to a 130ms+ frame spike on Grid)
 	// for a view that was never supposed to be doing any per-frame work at all.
 	if ( lastDepthCueCameraPos && camera.position.distanceTo( lastDepthCueCameraPos ) < DEPTH_CUE_CAMERA_MOVE_EPSILON ) {
@@ -774,73 +1070,147 @@ function maybeUpdateDepthCue( timestamp ) {
 	lastDepthCueUpdate = timestamp;
 	lastDepthCueCameraPos = camera.position.clone();
 
-	applyDistanceDepthCue( objects );
+	applyGridLayerVisibility();
 
 }
 
-function updateGridLayerStatusText() {
+// Covers every piece of Grid's own UI: the #grid-layer-toggle button
+// itself (only ever shown while Grid is the active shape - the "extra
+// button" that appears specifically for Grid), the status line and layer
+// dots (only shown once Layer mode is actually on), and the rotate-pad
+// icons' styling (up/down dimmed "off", left/right highlighted to show
+// they've taken on a different job - see the .is-inactive/.is-layer-nav
+// rules in style.css). One function for all of it, called from every place
+// any of this state can change, so none of these pieces can ever drift out
+// of sync with each other.
+function updateGridLayerUI() {
 
+	const toggleBtn = document.getElementById( 'grid-layer-toggle' );
 	const statusEl = document.getElementById( 'grid-layer-status' );
+	const dotsEl = document.getElementById( 'grid-layer-dots' );
+	const upBtn = document.getElementById( 'rotate-up' );
+	const downBtn = document.getElementById( 'rotate-down' );
+	const leftBtn = document.getElementById( 'rotate-left' );
+	const rightBtn = document.getElementById( 'rotate-right' );
 
-	if ( currentGridLayer === null ) {
+	if ( activeLayoutKey !== 'grid' ) {
+
+		toggleBtn.classList.add( 'hidden' );
+		statusEl.classList.add( 'hidden' );
+		dotsEl.classList.add( 'hidden' );
+		upBtn.classList.remove( 'is-inactive' );
+		downBtn.classList.remove( 'is-inactive' );
+		leftBtn.classList.remove( 'is-layer-nav' );
+		rightBtn.classList.remove( 'is-layer-nav' );
+		return;
+
+	}
+
+	// The toggle button itself is Grid-only chrome - visible any time Grid
+	// is active, regardless of whether Layer mode is currently on.
+	toggleBtn.classList.remove( 'hidden' );
+	toggleBtn.classList.toggle( 'active', gridLayerModeActive );
+
+	// Up/down have nothing to do while only one layer is ever on screen at
+	// a time, so they're shown dimmed/"off" rather than just silently not
+	// responding - left/right take on a different job (previous/next
+	// layer instead of rotate), so they're highlighted instead, the same
+	// visual language the rest of the toolbar already uses for "this
+	// control means something different right now".
+	upBtn.classList.toggle( 'is-inactive', gridLayerModeActive );
+	downBtn.classList.toggle( 'is-inactive', gridLayerModeActive );
+	leftBtn.classList.toggle( 'is-layer-nav', gridLayerModeActive );
+	rightBtn.classList.toggle( 'is-layer-nav', gridLayerModeActive );
+
+	if ( ! gridLayerModeActive ) {
 
 		statusEl.classList.add( 'hidden' );
+		dotsEl.classList.add( 'hidden' );
+		return;
 
-	} else {
+	}
 
-		statusEl.classList.remove( 'hidden' );
-		statusEl.textContent = `Viewing Layer ${ currentGridLayer } of ${ totalGridLayers } - use arrow keys to move, click GRID to see all`;
+	statusEl.classList.remove( 'hidden' );
+	dotsEl.classList.remove( 'hidden' );
+	statusEl.textContent = `Layer ${ currentGridLayer } of ${ totalGridLayers }`;
+
+	Array.from( dotsEl.children ).forEach( ( dot, i ) => {
+
+		dot.classList.toggle( 'active', currentGridLayer === i + 1 );
+
+	} );
+
+}
+
+// Builds the row of small clickable dots - one per Grid layer - that let
+// you jump straight to any layer instead of stepping through the ones in
+// between one at a time. Rebuilt whenever the data's total layer count
+// changes (first load, and again after Refresh Data if the row count
+// changed) rather than once at startup, since totalGridLayers isn't known
+// until the real data has loaded.
+function renderGridLayerDots() {
+
+	const dotsEl = document.getElementById( 'grid-layer-dots' );
+	dotsEl.innerHTML = '';
+
+	for ( let i = 1; i <= totalGridLayers; i ++ ) {
+
+		const dot = document.createElement( 'button' );
+		dot.className = 'grid-layer-dot';
+		dot.type = 'button';
+		dot.title = `Layer ${ i }`;
+		dot.addEventListener( 'click', () => goToGridLayer( i ) );
+		dotsEl.appendChild( dot );
 
 	}
 
 }
 
-function hideGridLayerStatus() {
-
-	document.getElementById( 'grid-layer-status' ).classList.add( 'hidden' );
-
-}
-
-// Re-frames the camera on whatever's currently visible in Grid: either the
-// front layer (while showing everything), or (while stepping) the current
-// layer plus every layer still ahead of it, matching the "sliding book" visual.
-function reframeGridView() {
+// Re-frames the camera on whatever's currently visible in Grid: the WHOLE
+// stack (every layer) with Layer mode off, or just the one current layer
+// with it on - see getFramingTargets.
+//
+// `isBigMove` picks which of two durations this reframe uses. A single
+// "next card" step (arrow key/pad, one layer at a time, the common case)
+// uses GRID_STEP_FLY_DURATION - short and snappy, so repeated stepping
+// feels immediate rather than laggy. Anything that's a bigger visual jump -
+// entering stepping mode from the overview, or clicking a layer dot
+// several layers away from the current one - uses the slower, more normal
+// duration instead: arriving at a big jump in the same short 450ms as a
+// one-layer step read as an abrupt cut, not a deliberate move, since so
+// much more of the view changes at once.
+function reframeGridView( isBigMove = false ) {
 
 	const subset = getFramingTargets( 'grid' );
 	const { center, distance } = computeFraming( subset.length ? subset : targets.grid, getFramingPadding( 'grid' ), GRID_FOV );
 
-	flyCameraTo( center, distance );
+	flyCameraTo( center, distance, Math.PI / 2, isBigMove ? 700 : GRID_STEP_FLY_DURATION );
 
 }
 
 // Picks which target positions the camera should actually size/center
-// itself around for a given shape. For the default view, that's simply
-// every tile, for every shape including Grid.
-//
-// An earlier version of this framed Grid's default view on the FRONT LAYER
-// ALONE, to keep it from looking small - but that was the wrong fix. Grid
-// has real gaps between tiles (unlike Sphere/Helix, which are closed
-// surfaces with nothing to see past), and getting the camera close enough
-// to size the front layer nicely meant those gaps let you see straight
-// through into the layers receding behind - a distracting "tunnel vision"
-// starburst, not a clean grid. No amount of retuning spacing/padding fixes
-// that; it's a direct consequence of framing on a sparse subset up close.
-// Framing on the WHOLE shape instead - the same thing every other shape
-// already does - keeps Grid's default view a safe, undistorted view of the
-// full 5x4x10 arrangement. A closer, front-emphasized view is exactly what
-// the FIT button is for.
-//
-// Stepping through Grid's layers (currentGridLayer !== null) is the one
-// place a subset still makes sense: at that point, everything BEFORE the
-// current layer is already hidden, so there's no additional visible
-// content left behind the framed subset for gaps to reveal - nothing to
-// tunnel into.
+// itself around for a given shape. For every shape except Grid, that's
+// simply every tile - Grid needs its own logic because how much of it is
+// actually ON SCREEN right now depends on whether Layer mode is active
+// (see applyGridLayerVisibility/gridLayerModeActive):
+// - Layer mode OFF (the real default): every layer is visible at once, a
+//   genuine full-depth 3D shape - so frame on the WHOLE thing, exactly like
+//   Sphere or Helix get framed on their own full set of targets.
+// - Layer mode ON: only the current layer is visible - so frame on just
+//   that one layer's own footprint, the same way Table gets framed on its
+//   own flat content.
 function getFramingTargets( layoutKey ) {
 
-	if ( layoutKey === 'grid' && currentGridLayer !== null ) {
+	if ( layoutKey === 'grid' ) {
 
-		const perLayer = GRID_WIDTH * GRID_HEIGHT;
-		return targets.grid.slice( ( currentGridLayer - 1 ) * perLayer );
+		if ( currentGridLayer !== null ) {
+
+			const perLayer = GRID_WIDTH * GRID_HEIGHT;
+			return targets.grid.slice( ( currentGridLayer - 1 ) * perLayer, currentGridLayer * perLayer );
+
+		}
+
+		return targets.grid;
 
 	}
 
@@ -858,7 +1228,12 @@ function rotateCameraStep( axis, sign ) {
 	const spherical = new THREE.Spherical().setFromVector3( offset );
 
 	if ( axis === 'theta' ) spherical.theta += sign * ROTATE_STEP;
-	if ( axis === 'phi' ) spherical.phi = THREE.MathUtils.clamp( spherical.phi + sign * ROTATE_STEP, MIN_PHI, MAX_PHI );
+	if ( axis === 'phi' ) {
+
+		const phiRange = getPhiClampRange( activeLayoutKey );
+		spherical.phi = THREE.MathUtils.clamp( spherical.phi + sign * ROTATE_STEP, phiRange.min, phiRange.max );
+
+	}
 
 	offset.setFromSpherical( spherical );
 	camera.position.copy( controls.target ).add( offset );
@@ -914,7 +1289,7 @@ function getZoomLimits() {
 		// Without a floor of its own, the generic 0.15x-of-fit-distance limit
 		// let the camera zoom in far enough to end up INSIDE the coil's own
 		// radius, looking back out through it from within - a wide, warped
-		// "fisheye funnel" that doesn't read as a double helix at all (it's
+		// "fisheye funnel" that doesn't read as a spiral at all (it's
 		// the exact shape someone gets stuck in if they scroll-zoom in too
 		// far and can no longer tell what they're looking at). Tying the
 		// floor to the coil's own actual radius instead means the camera can
@@ -945,30 +1320,25 @@ function getHelixMinCameraDistance() {
 
 }
 
+// Plain mouse-wheel scrolling used to page Grid through its depth layers
+// instead of zooming - meant to fix "I can't scroll to the end", but it
+// caused a worse, opposite problem: a single normal scroll gesture
+// (especially a trackpad, which can fire a dozen+ wheel events in well
+// under a second) reliably overshot straight past every intermediate layer
+// and landed on the very last one, every time - "I always scroll and end
+// up in layer 10". Layer navigation now lives entirely in controls meant
+// for discrete, deliberate steps (arrow keys/pad - one layer per press) and
+// direct jumps (the layer dots below the Grid view - see
+// renderGridLayerDots/goToGridLayer - click any dot to jump straight to
+// that layer, no stepping through the ones in between required). The wheel
+// goes back to doing exactly one thing on every shape, Grid included: zoom,
+// centered on the cursor - simpler to predict, and it also means Grid no
+// longer needs Ctrl/Cmd-to-zoom as a special case.
 function onWheelZoom( event ) {
 
 	event.preventDefault();
 
 	const { min, max } = getZoomLimits();
-
-	// Grid gets simple, centered zoom - it's the one shape deep enough that
-	// cursor-following zoom noticeably dragged the pivot point away from
-	// its real center. Table/Sphere/Helix keep the cursor-following zoom
-	// below, since that felt right and you asked us not to remove it.
-	if ( activeLayoutKey === 'grid' ) {
-
-		const distance = camera.position.distanceTo( controls.target );
-		const zoomFactor = event.deltaY > 0 ? 1.08 : 0.92;
-		const newDistance = THREE.MathUtils.clamp( distance * zoomFactor, min, max );
-
-		const dir = new THREE.Vector3().subVectors( camera.position, controls.target ).normalize();
-		camera.position.copy( controls.target ).addScaledVector( dir, newDistance );
-
-		controls.update();
-		render();
-		return;
-
-	}
 
 	const rect = renderer.domElement.getBoundingClientRect();
 	const ndcX = ( ( event.clientX - rect.left ) / rect.width ) * 2 - 1;
@@ -993,45 +1363,183 @@ function onWheelZoom( event ) {
 
 }
 
-// How much breathing room to leave around the framed shape. Grid's
-// layer-stepping view gets a bit extra: even though nothing hidden is left
-// behind the visible subset to "tunnel" into (see getFramingTargets above),
-// a couple of exposed layers up close can still feel cramped, so a little
-// more room keeps that view comfortable without any downside.
+// How much breathing room to leave around the framed shape, ON TOP OF the
+// exact chrome-avoidance computeFraming already does via
+// getSafeViewportRect below - this is just a small extra safety margin, not
+// what actually keeps the shape off the toolbar/nav-pad/menu/legend (that's
+// no longer padding-based guesswork at all - see computeFraming).
 function getFramingPadding( layoutKey, tight = false ) {
 
-	if ( layoutKey === 'grid' && currentGridLayer !== null ) return tight ? 1.2 : 1.35;
-	// A little extra room (1.15 -> 1.25) on the normal Reset framing: the
-	// legend and menu bar overlay the bottom of the window on top of the
-	// 3D view, but aren't accounted for in the camera math itself (which
-	// only knows about the full window height). Without this margin, a
-	// shape sized to exactly fill the vertical field of view can end up
-	// with its lowest tiles sitting right behind that overlay instead of
-	// just above it. FIT deliberately keeps its own tighter padding - it's
-	// the explicit "make it as big as possible" action, so some overlap
-	// there is an accepted trade-off the person asked for.
-	return tight ? 1.02 : 1.25;
+	// Grid frames on the shape's own REAL geometry now (every tile's actual
+	// final position, fan-out stagger included - see getFramingTargets),
+	// not an approximated footprint, so it needs less of a hand-tuned
+	// safety margin than it used to - just a little extra for ordinary
+	// perspective convergence at the FOV's edges.
+	if ( layoutKey === 'grid' ) return tight ? 1.03 : 1.08;
+	return tight ? 1.02 : 1.05;
 
 }
 
-// Works out where the "middle" of a layout actually is, and how far back the
-// camera needs to sit to see all of it - used by resetCamera()/reframeGridView()
-// so every shape (or Grid subset) gets centered correctly.
-function computeFraming( layoutTargets, padding = 1.15, fovDeg = BASE_FOV ) {
+// Reads the ACTUAL on-screen position of every piece of persistent UI
+// chrome - the top toolbar, the right-hand nav-pad, the bottom menu and
+// legend, and (only while it's actually showing) Grid's own layer status/
+// dots - and returns the rectangle of screen space left over once all of
+// it is excluded. This is what computeFraming below fits shapes into,
+// instead of the raw browser window: reading real, live
+// getBoundingClientRect() geometry rather than hardcoded pixel guesses
+// means this stays correct automatically if any of that chrome's own
+// size ever changes (a longer status string, a narrower window wrapping
+// the toolbar, etc.), instead of silently drifting out of sync with a
+// hand-tuned constant the way the old padding-multiplier approach could.
+function getSafeViewportRect() {
+
+	let top = 0, bottom = window.innerHeight, left = 0, right = window.innerWidth;
+
+	const toolbarRect = document.getElementById( 'top-toolbar' ).getBoundingClientRect();
+	top = Math.max( top, toolbarRect.bottom );
+
+	const navRect = document.getElementById( 'nav-pad' ).getBoundingClientRect();
+	right = Math.min( right, navRect.left );
+
+	const menuRect = document.getElementById( 'menu' ).getBoundingClientRect();
+	bottom = Math.min( bottom, menuRect.top );
+
+	const legendRect = document.getElementById( 'legend' ).getBoundingClientRect();
+	bottom = Math.min( bottom, legendRect.top );
+
+	// Grid's own status line/dots (see updateGridLayerUI) only exist in the
+	// DOM while Layer mode is on - sitting just above the menu, they eat a
+	// bit more of the bottom margin exactly while they're visible, so a fit
+	// computed the moment Layer mode turns on (or off) always already
+	// accounts for them correctly.
+	const gridStatus = document.getElementById( 'grid-layer-status' );
+	if ( ! gridStatus.classList.contains( 'hidden' ) ) bottom = Math.min( bottom, gridStatus.getBoundingClientRect().top );
+
+	const gridDots = document.getElementById( 'grid-layer-dots' );
+	if ( ! gridDots.classList.contains( 'hidden' ) ) bottom = Math.min( bottom, gridDots.getBoundingClientRect().top );
+
+	// A small breathing gap on top of the exact pixel edges above - sitting
+	// flush against the actual edge of a button still reads as "touching
+	// it", not "clear of it".
+	const GAP = 12;
+	top += GAP;
+	bottom -= GAP;
+	right -= GAP;
+
+	return {
+		top, bottom, left, right,
+		width: Math.max( 100, right - left ),
+		height: Math.max( 100, bottom - top ),
+		centerX: ( left + right ) / 2,
+		centerY: ( top + bottom ) / 2
+	};
+
+}
+
+// Works out where the camera actually needs to look, and how far back it
+// needs to sit, to show a layout's real geometry sized to fill - and stay
+// entirely clear of - the safe viewport rectangle above (not the raw
+// browser window). Used by resetCamera()/fitToPanel()/reframeGridView() so
+// every shape (or Grid subset) gets framed the same correct way.
+// Reads a tile's real, currently-rendered width/height straight off one of
+// its own DOM elements (CSS3DRenderer tiles are real <div>s - see
+// tileFactory.js/style.css's .element - and 1 CSS px is 1 world unit before
+// any object.scale is applied), instead of hardcoding a second copy of
+// style.css's 130x180 here that could silently drift out of sync with it if
+// the tile size is ever retuned in CSS alone. Falls back to that same
+// 130x180 only for the rare moment a framing call happens before any tile
+// exists in the DOM yet.
+function getTileBaseSize() {
+
+	const sample = document.querySelector( '#container .element' );
+	if ( ! sample ) return { width: 130, height: 180 };
+	return { width: sample.offsetWidth, height: sample.offsetHeight };
+
+}
+
+function computeFraming( layoutTargets, padding = 1.05, fovDeg = BASE_FOV ) {
 
 	const box = new THREE.Box3();
-	layoutTargets.forEach( t => box.expandByPoint( t.position ) );
+	// Building the box from each tile's own CENTER point only - which is all
+	// this used to do - quietly assumes every tile has zero size, so the box
+	// stops exactly at the last tile's midpoint instead of its actual outer
+	// edge. That's a small, easy-to-miss error for a shape with lots of
+	// tiles spread across a big radius (Sphere, Helix - which is why
+	// neither ever showed a visible overlap from it), but it's a BIG one for
+	// Table and Grid: their outermost row of tiles sits only half a tile's
+	// own width/height beyond its center, and that missing half-tile is
+	// exactly what was still poking past the "safe" rectangle into the
+	// toolbar/legend/menu even after framing was otherwise centered and
+	// sized correctly - a table 10 rows tall was being measured as if it
+	// were 9 rows tall, plus a sliver. Expanding the box by each tile's real
+	// four corners (its actual live rendered size, read straight off a
+	// tile's own DOM element rather than a hardcoded duplicate of the CSS,
+	// so it can never quietly drift out of sync with it - see
+	// getTileBaseSize - scaled by that tile's own userData.scale and rotated
+	// by its own orientation, so this is equally correct for Sphere/Helix's
+	// outward-facing tiles too) fixes that at the source, for every shape,
+	// instead of papering over it with extra padding.
+	const { width: tileWidth, height: tileHeight } = getTileBaseSize();
+	const halfW = tileWidth / 2, halfH = tileHeight / 2;
+	const localCorners = [
+		new THREE.Vector3( - halfW, - halfH, 0 ),
+		new THREE.Vector3( halfW, - halfH, 0 ),
+		new THREE.Vector3( - halfW, halfH, 0 ),
+		new THREE.Vector3( halfW, halfH, 0 )
+	];
+	const corner = new THREE.Vector3();
+	layoutTargets.forEach( t => {
 
-	const center = box.getCenter( new THREE.Vector3() );
+		const s = ( t.userData && t.userData.scale ) || 1;
+		localCorners.forEach( ( lc ) => {
+
+			corner.copy( lc ).multiplyScalar( s ).applyQuaternion( t.quaternion ).add( t.position );
+			box.expandByPoint( corner );
+
+		} );
+
+	} );
+
+	const shapeCenter = box.getCenter( new THREE.Vector3() );
 	const size = box.getSize( new THREE.Vector3() );
 
-	// Only width/height need to "fit" inside the field of view this way -
-	// depth doesn't, since it runs toward/away from the camera rather than
-	// sideways across the screen.
-	const widthHeight = Math.max( size.x, size.y, 500 );
-
+	// Width and height need two SEPARATE checks, not one shared one - `fovDeg`
+	// is always a VERTICAL field of view, and the actual HORIZONTAL field of
+	// view it produces on screen depends on the camera's aspect ratio too
+	// (horizontal = vertical stretched by aspect). Treating a single
+	// `Math.max(size.x, size.y)` as if it only needs to fit inside the
+	// vertical FOV (as this used to) silently assumed a specific aspect
+	// ratio; on any window narrower/taller than that, a wide shape's sides
+	// would clip past the edges of the screen, because nothing had actually
+	// checked whether the WIDTH fit inside the real (aspect-adjusted)
+	// horizontal FOV. Computing both required distances and taking whichever
+	// is larger fixes that on any window shape - and it's what makes it
+	// safe for every shape to always render at its own exactly-tuned
+	// reference FOV (see GRID_FOV / HELIX_FOV / BASE_FOV and
+	// fitCameraToWindow below), instead of the previous approach of
+	// widening the FOV itself on narrower windows, which kept width from
+	// clipping but did it by distorting Grid's/Helix's depth perspective
+	// (more convergence/bulge) on exactly the window shapes most people
+	// actually use.
 	const halfFovRad = ( fovDeg * Math.PI / 180 ) / 2;
-	const fitDistance = ( widthHeight / 2 / Math.tan( halfFovRad ) ) * padding;
+	const aspect = ( camera && camera.aspect ) || BASE_ASPECT;
+	const halfHorizontalFovRad = Math.atan( Math.tan( halfFovRad ) * aspect );
+
+	// The safe rectangle (see getSafeViewportRect) is almost always smaller
+	// than the full window - the toolbar/nav-pad/menu/legend all eat into
+	// it. A shape sized to exactly fill the FULL window's field of view
+	// would then draw straight through all of that chrome. Instead, the
+	// fit distance is scaled up (camera backs up further, shrinking the
+	// shape on screen) by exactly the ratio of the full window to the safe
+	// rectangle on each axis - which is precisely what's needed for the
+	// shape to fill the SAFE rectangle instead of the window behind it.
+	const safeRect = getSafeViewportRect();
+	const safeHeightFraction = safeRect.height / window.innerHeight;
+	const safeWidthFraction = safeRect.width / window.innerWidth;
+
+	const heightFitDistance = ( Math.max( size.y, 500 ) / 2 / Math.tan( halfFovRad ) ) * padding / safeHeightFraction;
+	const widthFitDistance = ( Math.max( size.x, 500 ) / 2 / Math.tan( halfHorizontalFovRad ) ) * padding / safeWidthFraction;
+	const fitDistance = Math.max( heightFitDistance, widthFitDistance );
 
 	// `distance` here is measured from the camera to the CENTER of the
 	// shape, not to its nearest point - and for anything with real depth
@@ -1049,7 +1557,48 @@ function computeFraming( layoutTargets, padding = 1.15, fovDeg = BASE_FOV ) {
 	// have in the first place.
 	const distance = fitDistance + size.z / 2;
 
-	return { center, distance };
+	// The safe rectangle isn't centered in the window (the nav-pad only eats
+	// space on the right, the bottom menu+legend are taller than the top
+	// toolbar), so sizing the shape to fit it isn't enough on its own - a
+	// camera that simply looks straight at the shape's own true center
+	// always renders that point in the exact middle of the WINDOW, chrome
+	// or no chrome, which visibly favors the side with less chrome.
+	//
+	// This used to be fixed by nudging `center` itself sideways by a few
+	// pixels' worth of world units, so the shape would sit dead in the
+	// middle of the safe rectangle instead. That looked right for the one
+	// static frame right after Reset/FIT - but `center` here isn't just a
+	// one-time framing number: flyCameraTo() hands it straight to
+	// controls.target, and EVERY rotation from that point on (left-click-
+	// drag, the up/left/down/right pad, arrow keys) orbits the camera
+	// around exactly that point, forever, until the next Reset/FIT. A few
+	// pixels' cosmetic offset off the shape's own true center doesn't
+	// sound like much, but orbiting around a pivot that ISN'T the shape's
+	// real center doesn't read as "the shape spinning in place" - it reads
+	// as the whole shape swinging/arcing across the screen on every drag,
+	// because that's genuinely what it's doing. This is what was actually
+	// behind "the shape moves/pans when I try to rotate it" - not a bug in
+	// the drag or pad handlers themselves (they already only ever orbit
+	// around controls.target, never move it), but controls.target itself
+	// not being the shape's true center to begin with.
+	//
+	// The actual fix: keep `center` as the shape's real, unmodified center
+	// always (so rotation is correct at the source, for every shape, for
+	// both drag and the pad/keys) and get the same visual re-centering a
+	// completely different way - shifting what the CAMERA RENDERS, not
+	// where it sits or what it's aimed at. `viewOffsetPx`, returned below,
+	// is consumed by applyFraming() via THREE's own camera.setViewOffset -
+	// an off-axis/lens-shift projection built for exactly this (shifting
+	// the rendered frame on screen without moving the camera or changing
+	// what it's centered on). Unlike moving the target, this never touches
+	// controls.target, so it can never again become tomorrow's rotation
+	// pivot.
+	const desiredPxX = safeRect.centerX - window.innerWidth / 2;
+	const desiredPxY = safeRect.centerY - window.innerHeight / 2;
+
+	const center = shapeCenter.clone();
+
+	return { center, distance, viewOffsetPx: { x: desiredPxX, y: desiredPxY } };
 
 }
 
@@ -1063,63 +1612,91 @@ function fitToPanel() {
 	if ( activeLayoutKey === 'grid' && currentGridLayer !== null ) {
 
 		currentGridLayer = null;
+		gridLayerModeActive = false;
 		applyGridLayerVisibility();
-		updateGridLayerStatusText();
+		updateGridLayerUI();
 
 	}
 
 	const currentTargets = getFramingTargets( activeLayoutKey );
-	const { center, distance } = computeFraming( currentTargets, getFramingPadding( activeLayoutKey, true ), getFramingFov( activeLayoutKey ) ); // minimal padding
+	const { center, distance, viewOffsetPx } = computeFraming( currentTargets, getFramingPadding( activeLayoutKey, true ), getFramingFov( activeLayoutKey ) ); // minimal padding
 
-	flyCameraTo( center, distance, getDefaultPhi( activeLayoutKey ) );
+	flyCameraTo( center, distance, getDefaultPhi( activeLayoutKey ), 800, viewOffsetPx );
 
 }
 
-// Which field of view a shape's own framing math should assume - Grid uses
-// its own much narrower "telephoto" FOV (see GRID_FOV above), everything
-// else uses the normal one. Kept as one shared function so every framing
-// call site (Reset, Fit, Grid's own layer reframe, and the zoom limits) is
-// guaranteed to agree with whatever the camera's ACTUAL fov gets set to in
-// fitCameraToWindow() below - a mismatch between the two would throw off
-// every distance calculation for whichever shape it happened on.
+// Which field of view a shape's own framing math should assume - Grid and
+// Helix each use their own narrower "telephoto" FOV (see GRID_FOV and
+// HELIX_FOV above), Table/Sphere use the normal one. Kept as one shared
+// function so every framing call site (Reset, Fit, Grid's own layer
+// reframe, and the zoom limits) is guaranteed to agree with whatever the
+// camera's ACTUAL fov gets set to in fitCameraToWindow() below - a mismatch
+// between the two would throw off every distance calculation for whichever
+// shape it happened on.
 function getFramingFov( layoutKey ) {
 
-	return layoutKey === 'grid' ? GRID_FOV : BASE_FOV;
+	if ( layoutKey === 'grid' ) return GRID_FOV;
+	if ( layoutKey === 'helix' ) return HELIX_FOV;
+	return BASE_FOV;
 
 }
 
 // Default camera ELEVATION (the spherical "phi" angle, measured from
-// straight overhead) that Reset/Fit start each shape at. Every shape except
-// Helix starts dead-on at the equator (phi = 90 degrees, i.e. Math.PI / 2) -
-// a plain, flat, straight-on view, exactly as before.
+// straight overhead) that Reset/Fit start each shape at.
 //
-// Helix is the one shape that actually needs a tilt by default: a double
-// helix viewed exactly at the equator reads as a flat wall of vertical
-// columns - you can't tell it's wound in a circle at all unless you rotate
-// it yourself first. Tilting the DEFAULT view down slightly (still safely
-// inside MIN_PHI/MAX_PHI, nowhere near the "steep angle turns it into a
-// confusing funnel" zone those constants already guard against) is what
-// actually lets the coil read as a circular, spiraling shape right away -
-// "seeing the whole circle" without needing to already know to go drag the
-// view first.
-const HELIX_DEFAULT_PHI = 1.05; // ~60 degrees from straight overhead
-
+// Helix used to start tilted down (phi ~60 degrees from overhead) so the
+// coil read as a wound spiral right away instead of a flat wall of vertical
+// columns - technically correct (you could see it really is a circle), but
+// the actual preferred look turned out to be the opposite: a straight-on,
+// dead-ahead "front view" of the coil - the near strand filling most of the
+// screen like a gently curved wall of cards, the same way Sphere and Grid's
+// default views are also plain and straight-on rather than tilted. Every
+// shape now starts at the equator (phi = 90 degrees, i.e. Math.PI / 2) - a
+// left-click-drag still tilts the view to see the coil wind around, exactly
+// as before, it's just no longer forced on by default.
 function getDefaultPhi( layoutKey ) {
 
-	return layoutKey === 'helix' ? HELIX_DEFAULT_PHI : Math.PI / 2;
+	return Math.PI / 2;
 
 }
 
-// Shared camera-fly-to helper, used by both resetCamera() and reframeGridView()
-// so there's exactly one place implementing this animation. `phi` is the
-// spherical elevation angle to fly to (see getDefaultPhi above) - default
-// keeps the original plain, straight-on framing for shapes that don't need
-// a tilt.
-function flyCameraTo( center, distance, phi = Math.PI / 2 ) {
+// Shared camera-fly-to helper, used by resetCamera(), fitToPanel(), and
+// reframeGridView() so there's exactly one place implementing this
+// animation. `phi` is the spherical elevation angle to fly to (see
+// getDefaultPhi above) - default keeps the original plain, straight-on
+// framing for shapes that don't need a tilt. `duration` defaults to the
+// original 800ms; reframeGridView passes GRID_STEP_FLY_DURATION (shorter)
+// for a snappier per-layer step. `viewOffsetPx` is computeFraming()'s
+// visual re-centering amount (see the comment there) - applied via
+// camera.setViewOffset() (an off-axis/lens-shift projection: shifts what's
+// rendered on screen without moving the camera or its target), not by
+// moving center/controls.target, precisely so it can never become the
+// rotation pivot. Passing null (Grid's per-layer reframe does this) leaves
+// whatever offset is already set untouched, since that step re-frames the
+// same still-centered shape, not a fresh Reset/FIT.
+function flyCameraTo( center, distance, phi = Math.PI / 2, duration = 800, viewOffsetPx = null ) {
 
 	// Camera dragging can also tilt/roll the camera's "up" orientation over
 	// time - resetting it here stops the view from staying skewed.
 	camera.up.set( 0, 1, 0 );
+
+	if ( viewOffsetPx ) {
+
+		// A pure shift, not a crop: the "full" frame and the "view" window
+		// are the same size (window.innerWidth x window.innerHeight) - only
+		// the window's position within that conceptual frame moves, which is
+		// what makes this a plain sideways nudge of the rendered image
+		// rather than a zoom or a crop. Sign is negative because shifting
+		// the CONCEPTUAL frame left/up is what moves the rendered CONTENT
+		// right/down on screen - confirmed empirically against
+		// getSafeViewportRect's own sign convention (see computeFraming).
+		camera.setViewOffset(
+			window.innerWidth, window.innerHeight,
+			- viewOffsetPx.x, - viewOffsetPx.y,
+			window.innerWidth, window.innerHeight
+		);
+
+	}
 
 	cameraTweens.removeAll();
 
@@ -1134,12 +1711,12 @@ function flyCameraTo( center, distance, phi = Math.PI / 2 ) {
 	// frame regardless, so calling it again per-tween-per-frame was pure
 	// duplicate work during every camera flight/reset animation.
 	new TWEEN.Tween( camera.position, cameraTweens )
-		.to( { x: endPos.x, y: endPos.y, z: endPos.z }, 800 )
+		.to( { x: endPos.x, y: endPos.y, z: endPos.z }, duration )
 		.easing( TWEEN.Easing.Exponential.InOut )
 		.start();
 
 	new TWEEN.Tween( controls.target, cameraTweens )
-		.to( { x: center.x, y: center.y, z: center.z }, 800 )
+		.to( { x: center.x, y: center.y, z: center.z }, duration )
 		.easing( TWEEN.Easing.Exponential.InOut )
 		.onUpdate( () => controls.update() )
 		.start();
@@ -1147,23 +1724,24 @@ function flyCameraTo( center, distance, phi = Math.PI / 2 ) {
 }
 
 // Puts the camera back to a clean, centered view of whichever shape is
-// currently active. On Grid, this also always resets layer-stepping back
-// to "show everything" - Reset View is one of the two ways to exit
-// layer-stepping mode (clicking GRID again is the other).
+// currently active. On Grid, this also always resets Layer mode back off -
+// Reset View is one of the two ways to exit Layer mode (turning the
+// #grid-layer-toggle button back off is the other).
 function resetCamera() {
 
 	if ( activeLayoutKey === 'grid' && currentGridLayer !== null ) {
 
 		currentGridLayer = null;
+		gridLayerModeActive = false;
 		applyGridLayerVisibility();
-		updateGridLayerStatusText();
+		updateGridLayerUI();
 
 	}
 
 	const currentTargets = getFramingTargets( activeLayoutKey );
-	const { center, distance } = computeFraming( currentTargets, getFramingPadding( activeLayoutKey ), getFramingFov( activeLayoutKey ) );
+	const { center, distance, viewOffsetPx } = computeFraming( currentTargets, getFramingPadding( activeLayoutKey ), getFramingFov( activeLayoutKey ) );
 
-	flyCameraTo( center, distance, getDefaultPhi( activeLayoutKey ) );
+	flyCameraTo( center, distance, getDefaultPhi( activeLayoutKey ), 800, viewOffsetPx );
 
 }
 
@@ -1292,7 +1870,7 @@ async function refreshData() {
 		if ( activeLayoutKey === 'grid' ) {
 
 			applyGridLayerVisibility();
-			updateGridLayerStatusText();
+			updateGridLayerUI();
 
 		}
 
@@ -1379,34 +1957,36 @@ function onWindowResize() {
 
 }
 
-// Keeps the same horizontal extent of content visible no matter the window's
-// width/height - this is the fix for tiles being cut off or overlapping the
-// bottom menu on narrower/smaller windows. Also re-applied every time the
-// active shape changes (see switchLayout), not just on resize - Grid needs
-// its own much narrower reference FOV (GRID_FOV) applied here for the
-// "telephoto" effect described on that constant to actually take effect on
-// the real camera, not just in the distance math that frames it.
+// Sets the camera's aspect and field of view for whichever shape is active.
+//
+// This used to also WIDEN the FOV itself on narrower-than-16:9 windows, to
+// keep the same horizontal extent of content visible - but that was
+// actually working around a real gap in computeFraming()'s own math (it
+// only checked a shape's height against the vertical FOV, never its width
+// against the actual aspect-adjusted horizontal FOV - see the comment
+// there). Widening the FOV "fixed" the clipping, but as a side effect it
+// also distorted Grid's/Helix's depth perspective (more column-fanning,
+// more coil-bulging - see GRID_FOV / HELIX_FOV above) on exactly the
+// window shapes most people actually use, since real browser windows are
+// often closer to square than a cinematic 16:9. Now that computeFraming()
+// checks width and height separately and backs the camera up (not the FOV)
+// whenever a narrower window needs it, every shape can simply always use
+// its own exactly-tuned reference FOV, on any window shape, with nothing
+// ever clipping.
 function fitCameraToWindow() {
 
-	const aspect = window.innerWidth / window.innerHeight;
-	camera.aspect = aspect;
+	// Any view offset from computeFraming()/flyCameraTo() (see the comment
+	// there) was calculated against the OLD window size - camera.view still
+	// holds those old fullWidth/fullHeight numbers, and updateProjectionMatrix()
+	// below would reapply them as-is, producing a shift calibrated to a
+	// window size that no longer exists. Clearing it here rather than
+	// carrying it forward stale means a resize temporarily loses the extra
+	// re-centering-into-the-safe-rectangle polish until the next Reset/FIT
+	// recomputes it fresh - a small cosmetic step back, not a wrong shift.
+	camera.clearViewOffset();
 
-	const referenceFov = getFramingFov( activeLayoutKey );
-
-	if ( aspect < BASE_ASPECT ) {
-
-		// Window is narrower than our reference shape - widen the vertical FOV
-		// so the same horizontal width of tiles still fits on screen.
-		const baseHorizontalFOV = 2 * Math.atan( Math.tan( ( referenceFov * Math.PI / 180 ) / 2 ) * BASE_ASPECT );
-		const verticalFOV = 2 * Math.atan( Math.tan( baseHorizontalFOV / 2 ) / aspect );
-		camera.fov = verticalFOV * 180 / Math.PI;
-
-	} else {
-
-		camera.fov = referenceFov;
-
-	}
-
+	camera.aspect = window.innerWidth / window.innerHeight;
+	camera.fov = getFramingFov( activeLayoutKey );
 	camera.updateProjectionMatrix();
 
 }
@@ -1455,5 +2035,66 @@ function animate( timestamp ) {
 function render() {
 
 	renderer.render( scene, camera );
+	snapTileTransformsToPixelGrid();
 
 }
+
+// CSS3DRenderer writes each tile's position as a `matrix3d(...)` string
+// built straight from the camera's floating-point math, which almost never
+// lands exactly on a whole device pixel - a tile sitting at, say,
+// translateX(212.37px) forces the browser to blend/interpolate text and
+// edges across the pixel boundary instead of drawing it against a clean
+// pixel grid, which is what actually read as "blurry" while a shape sits
+// still (this is the same reason a browser can render an image crisply at
+// one zoom level and soft at another - fractional-pixel positioning, not
+// an actual loss of resolution).
+//
+// Rounding just the on-screen (x, y) part of each tile's translation to
+// the nearest whole pixel - elements 12 and 13 of the 16-value matrix3d
+// list are that translation, in CSS's column-major order; the rotation/
+// scale components before them and the depth (z) component right after
+// are left exactly as CSS3DRenderer computed them, so this changes
+// nothing about a tile's actual size, facing, or depth ordering.
+//
+// Measured, honest result: A/B testing this against real screenshots
+// (Laplacian-variance sharpness, before/after, same camera state) showed
+// no measurable improvement on its own - sub-pixel translation turned out
+// not to be the dominant cause of "sharp while moving, soft once still".
+// Left in anyway since it's free and correct on its own terms. See the
+// cameraGroupElement / will-change comment in init() for the fix actually
+// aimed at that behavior.
+function snapTileTransformsToPixelGrid() {
+
+	objects.forEach( ( obj ) => {
+
+		const el = obj.element;
+		const t = el.style.transform;
+
+		if ( ! t ) return;
+
+		// CSS3DObject's element carries a `translate(-50%, -50%) ` prefix
+		// (its own local re-centering, so each tile's declared position is
+		// its middle rather than its corner) BEFORE the matrix3d(...) this
+		// function actually needs to touch - searching for "matrix3d(" by
+		// name, not just "the first '('", is what a first version of this
+		// got wrong (that version's own indexOf('(') found the ONE inside
+		// "translate(" instead, so it was silently bailing out on every
+		// single tile, every frame - the rounding it was meant to apply
+		// never actually ran at all).
+		const matrixStart = t.indexOf( 'matrix3d(' );
+		if ( matrixStart === -1 ) return;
+
+		const open = matrixStart + 'matrix3d('.length - 1;
+		const parts = t.slice( open + 1, -1 ).split( ',' );
+
+		if ( parts.length !== 16 ) return;
+
+		parts[ 12 ] = Math.round( parseFloat( parts[ 12 ] ) );
+		parts[ 13 ] = Math.round( parseFloat( parts[ 13 ] ) );
+
+		el.style.transform = t.slice( 0, open + 1 ) + parts.join( ',' ) + ')';
+
+	} );
+
+}
+
